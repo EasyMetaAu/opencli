@@ -18,66 +18,15 @@
 
 ### AI Agent 探索工作流（必须遵循）
 
-```
- Step 0: 用 Playwright MCP 打开浏览器
-   ↓
- Step 1: 导航到目标页面，观察页面结构
-   ↓
- Step 2: 查看 Network 请求（browser_network_requests）
-   ↓
- Step 3: 模拟用户交互（点击按钮/标签/展开评论）
-   ↓
- Step 4: 再次查看 Network，发现新触发的 API
-   ↓
- Step 5: 分析 API 的请求参数、响应结构、鉴权方式
-   ↓
- Step 6: 编写适配器代码
-```
-
-### 具体操作步骤
-
-**Step 0: 打开浏览器**
-```
-工具: browser_navigate
-URL: https://www.bilibili.com/video/BV1xxxxx
-```
-
-**Step 1: 获取页面快照，了解页面结构**
-```
-工具: browser_snapshot
-→ 观察页面上有哪些可交互元素（按钮、标签、链接）
-```
-
-**Step 2: 查看已有的网络请求**
-```
-工具: browser_network_requests
-→ 筛选出 JSON API 端点（忽略静态资源）
-→ 记录 URL pattern、请求头、响应结构
-```
-
-**Step 3: 模拟用户交互发现深层 API**
-```
-工具: browser_click (点击"字幕"按钮、"评论"标签、"关注"链接等)
-工具: browser_wait_for (等待数据加载)
-```
-
-**Step 4: 再次抓包，发现新 API**
-```
-工具: browser_network_requests
-→ 对比 Step 2，找出新触发的 API 端点
-```
-
-**Step 5: 用 evaluate 测试 API 可行性**
-```
-工具: browser_evaluate
-代码: async () => {
-  const res = await fetch('https://api.bilibili.com/x/player/wbi/v2?bvid=BV1xxx&cid=123', 
-    { credentials: 'include' });
-  return await res.json();
-}
-→ 验证返回的数据结构和字段
-→ 如果返回空/403：检查是否需要签名（Wbi）或特殊 Header
-```
+| 步骤 | 工具 | 做什么 |
+|------|------|--------|
+| 0. 打开浏览器 | `browser_navigate` | 导航到目标页面 |
+| 1. 观察页面 | `browser_snapshot` | 观察可交互元素（按钮/标签/链接） |
+| 2. 首次抓包 | `browser_network_requests` | 筛选 JSON API 端点，记录 URL pattern |
+| 3. 模拟交互 | `browser_click` + `browser_wait_for` | 点击"字幕""评论""关注"等按钮 |
+| 4. 二次抓包 | `browser_network_requests` | 对比步骤 2，找出新触发的 API |
+| 5. 验证 API | `browser_evaluate` | `fetch(url, {credentials:'include'})` 测试返回结构 |
+| 6. 写代码 | — | 基于确认的 API 写适配器 |
 
 ### 常犯错误
 
@@ -581,34 +530,7 @@ cli({
 
 > **拦截核心思路**：不自己构造签名，而是利用 `installInterceptor` 劫持网站自己的 `XMLHttpRequest` 和 `fetch`，让网站发请求，我们直接在底层取出解析好的 `response.json()`。
 
-#### 进阶场景 1: 级联请求 (Cascading Requests) 与鉴权绕过
-
-部分 API 获取是非常复杂的连环请求（例如 B 站获取视频字幕：先需要 `bvid` 获取核心 `cid`，再通过 `cid` 获取包含签名/Wbi 的字幕列表拉取地址，最后 fetch 真实的 CDN 资源）。在此类场景中，你必须在一个 `evaluate` 块内部或者在 TypeScript Node 端编排整个请求链条：
-
-```typescript
-// 真实场景：B站获取视频字幕的级联获取思路
-const subtitleUrls = await page.evaluate(async (bvid) => {
-  // Step 1: 拿 CID (通常可以通过页面全局状态极速提取)
-  const cid = window.__INITIAL_STATE__?.videoData?.cid;
-  
-  // Step 2: 依据 BVID 和 CID 拿字幕配置 (可能需要携带 W_RID 签名或依赖浏览器当前登录状态 Cookie)
-  const res = await fetch(\`/x/player/wbi/v2?bvid=\${bvid}&cid=\${cid}\`, { credentials: 'include' });
-  const data = await res.json();
-  
-  // Step 3: 风控拦截/未登录降级空值检测 (Anti-Bot Empty Value Detection) ⚠️ 极其重要
-  // 很多大厂 API 只要签名失败或无强登录 Cookie 依然会返回 HTTP 200，但把关键 URL 设为 ""
-  const firstSubUrl = data.data?.subtitle?.subtitles?.[0]?.subtitle_url;
-  if (!firstSubUrl) {
-    throw new Error('被风控降级或需登录：拿不到真实的 subtitle_url，请检查 Cookie 状态 (Tier 2/3)');
-  }
-  
-  return firstSubUrl;
-}, kwargs.bvid);
-
-// Step 4: 拉取最终的 CDN 静态文件 (无鉴权)
-const finalRes = await fetch(subtitleUrls.startsWith('//') ? 'https:' + subtitleUrls : subtitleUrls);
-const subtitles = await finalRes.json();
-```
+> 💡 **级联请求**（如 BVID→CID→字幕）的完整模板和要点见下方[进阶模式: 级联请求](#进阶模式-级联请求-cascading-requests)章节。
 
 ---
 
@@ -673,68 +595,26 @@ opencli evaluate "(() => {
  └──────────────┘     └──────────────┘     └──────────────┘     └────────┘
 ```
 
-### Verbose 模式
+### Verbose 模式 & 输出验证
 
 ```bash
-# 查看 pipeline 每步的输入输出
-opencli bilibili hot --limit 1 -v
-```
-
-输出示例：
-```
-  [1/4] navigate → https://www.bilibili.com
-       → (no data)
-  [2/4] evaluate → (async () => { const res = await fetch(…
-       → [{title: "…", author: "…", play: 230835}]
-  [3/4] map (rank, title, author, play, danmaku)
-       → [{rank: 1, title: "…", author: "…"}]
-  [4/4] limit → 1
-       → [{rank: 1, title: "…"}]
-```
-
-### 输出格式验证
-
-```bash
-# 确认表格渲染正确
-opencli mysite hot -f table
-
-# 确认 JSON 可被 jq 解析
-opencli mysite hot -f json | jq '.[0]'
-
-# 确认 CSV 可被导入
-opencli mysite hot -f csv > data.csv
+opencli bilibili hot --limit 1 -v          # 查看 pipeline 每步数据流
+opencli mysite hot -f json | jq '.[0]'     # 确认 JSON 可被解析
+opencli mysite hot -f csv > data.csv       # 确认 CSV 可导入
 ```
 
 ---
 
-## Step 5: 注册 & 发布
+## Step 5: 提交发布
 
-### YAML 适配器
-
-放入 `src/clis/<site>/<name>.yaml` 即自动注册，无需额外操作。
-
-### TS 适配器
-
-放入 `src/clis/<site>/<name>.ts` 即自动加载模块，无需在 `index.ts` 中写入 `import`。
-
-### 验证注册
+文件放入 `src/clis/<site>/` 即自动注册（YAML 或 TS 无需手动 import），然后：
 
 ```bash
-opencli list                     # 确认新命令出现
-opencli validate mysite          # 校验定义完整性
+opencli list | grep mysite                            # 确认注册
+git add src/clis/mysite/ && git commit -m "feat(mysite): add hot" && git push
 ```
 
-### 提交
-
-```bash
-git add src/clis/mysite/
-git commit -m "feat(mysite): add hot and search adapters"
-git push
-```
-
-## 设计哲学: Zero-Dependency jq
-
-> 💡 **架构理念升级**: OpenCLI 的原生机制本质上内建了一个 **Zero-Dependency jq 数据处理流**。使用时不需要依赖系统命令级别的 `jq` 包，而是将所有的解析拍平动作放在 `evaluate` 块内的原生 JavaScript 里，再由外层 YAML 通过 `select`、`map` 等命令提取。这将彻底消灭跨操作系统下产生的第三方二进制库依赖。
+> 💡 **架构理念**：OpenCLI 内建 **Zero-Dependency jq** 数据流 — 所有解析在 `evaluate` 的原生 JS 内完成，外层 YAML 用 `select`/`map` 提取，无需依赖系统 `jq` 二进制。
 
 ---
 
