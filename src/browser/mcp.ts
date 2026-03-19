@@ -78,10 +78,13 @@ export class PlaywrightMCP {
       console.error(`[opencli] Starting daemon (${isTs ? 'ts' : 'js'})...`);
     }
 
-    // Use the current runtime to spawn daemon — avoids slow npx resolution.
-    // If already running under tsx (dev), process.execPath is tsx's node.
-    // If running compiled (node dist/), process.execPath is node.
-    this._daemonProc = spawn(process.execPath, [daemonPath], {
+    // For compiled .js, use the current node binary directly (fast).
+    // For .ts dev mode, node can't run .ts files — use tsx via --import.
+    const spawnArgs = isTs
+      ? [process.execPath, '--import', 'tsx/esm', daemonPath]
+      : [process.execPath, daemonPath];
+
+    this._daemonProc = spawn(spawnArgs[0], spawnArgs.slice(1), {
       detached: true,
       stdio: 'ignore',
       env: { ...process.env },
