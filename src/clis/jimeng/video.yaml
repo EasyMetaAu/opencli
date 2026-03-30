@@ -162,7 +162,7 @@ pipeline:
             body: JSON.stringify({ history_ids: [taskId] })
           }).then(r => r.json()).catch(() => null);
 
-          if (!queueResp || queueResp.ret !== '0') continue;
+          if (!queueResp || (queueResp.ret !== '0' && queueResp.ret !== 0)) continue;
 
           const taskInfo = queueResp.data?.[taskId];
 
@@ -171,11 +171,19 @@ pipeline:
               method: 'POST', credentials: 'include',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ history_ids: [taskId] })
-            }).then(r => r.json()).catch(() => null);
+            }).then(r => r.json());
 
-            const historyData = resultResp?.data?.[taskId];
+            if (resultResp.ret !== '0' && resultResp.ret !== 0) {
+              throw new Error('get_history_by_ids failed: ret=' + resultResp.ret + ' errmsg=' + (resultResp.errmsg || '') + ', task_id=' + taskId);
+            }
+
+            const historyData = resultResp.data?.[taskId];
             const items = historyData?.item_list || [];
             const videoUrl = items[0]?.video_url || '';
+
+            if (!videoUrl) {
+              throw new Error('Generation completed but no video_url in response, task_id=' + taskId);
+            }
 
             return [{ status: 'completed', task_id: taskId, video_url: videoUrl, queue_position: '' }];
           }
