@@ -11,66 +11,73 @@ pipeline:
   - navigate: https://jimeng.jianying.com/ai-tool/generate?type=image&workspace=0
   - evaluate: |
       (async () => {
-        // XHR wrapper — BDMS SDK patches XMLHttpRequest globally on jimeng pages
-        // to inject signing headers (appid, sign, device-time, etc.).
-        // Using XHR instead of fetch ensures the SDK can intercept and sign the request.
-        function xhrPost(url, body) {
-          return new Promise((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            xhr.open('POST', url, true);
-            xhr.withCredentials = true;
-            xhr.setRequestHeader('Content-Type', 'application/json');
-            xhr.onload = () => {
-              try { resolve(JSON.parse(xhr.responseText)); }
-              catch (e) { reject(new Error('invalid JSON: ' + xhr.responseText.substring(0, 100))); }
-            };
-            xhr.onerror = () => reject(new Error('XHR network error'));
-            xhr.ontimeout = () => reject(new Error('XHR timeout'));
-            xhr.timeout = 10000;
-            xhr.send(typeof body === 'string' ? body : JSON.stringify(body));
-          });
-        }
+        // 1. Wait for page to fully initialize (BDMS + React hydration)
+        await new Promise(r => setTimeout(r, 5000));
 
-        // 1) Fetch credit balance via XHR (BDMS-signed)
-        const creditData = await xhrPost('/commerce/v1/benefits/user_credit', {});
-
-        if (!creditData || creditData.ret === '1014') {
-          throw new Error('Not logged in — open jimeng.jianying.com in Chrome and sign in first');
-        }
-        if (creditData.ret !== '0' && creditData.ret !== 0) {
-          throw new Error('Credit API error: ret=' + creditData.ret + ' ' + (creditData.errmsg || ''));
-        }
-
-        const credit = creditData?.data?.credit;
-        if (!credit && credit !== 0) {
-          throw new Error('Credit field missing in response — page structure may have changed');
-        }
-
-        // 2) Fetch subscription info via XHR (best-effort, non-blocking)
-        let vipLevel = '';
-        let vipExpire = '';
-        try {
-          const sub = await xhrPost('/commerce/v1/subscription/user_info', {});
-          if (sub.ret === '0' || sub.ret === 0) {
-            const d = sub.data || {};
-            const levels = { svip: '\u9ad8\u7ea7\u4f1a\u5458', vip: '\u57fa\u7840\u4f1a\u5458', standard_vip: '\u6807\u51c6\u4f1a\u5458' };
-            vipLevel = levels[d.cur_vip_level] || d.cur_vip_level || 'free';
-            if (d.end_time && d.end_time > 0) {
-              vipExpire = new Date(d.end_time * 1000).toLocaleString('zh-CN');
-            }
+        // 2. Verify login — check for credit display element
+        const creditAmountEl = document.querySelector('[class*="credit-amount-container"],[class*="credit-amount-text"]');
+        if (!creditAmountEl) {
+          // No credit element visible — likely not logged in
+          const loginCheck = await fetch('/mweb/v1/get_user_info', {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+          }).then(r => r.json()).catch(() => null);
+          if (!loginCheck || loginCheck.ret === '1014' || loginCheck.ret === 1014) {
+            throw new Error('Not logged in — open jimeng.jianying.com in Chrome and sign in first');
           }
-        } catch (_) { /* subscription info is supplementary */ }
+          throw new Error('Credit display not found — page structure may have changed');
+        }
 
-        const vc = Number(credit.vipCredit ?? credit.vip_credit ?? 0);
-        const pc = Number(credit.purchaseCredit ?? credit.purchase_credit ?? 0);
-        const gc = Number(credit.giftCredit ?? credit.gift_credit ?? 0);
-        const total = (typeof credit === 'number') ? credit : (vc + pc + gc);
+        // 3. Click credit element to open the detail dropdown panel
+        const rect = creditAmountEl.getBoundingClientRect();
+        creditAmountEl.dispatchEvent(new MouseEvent('click', {
+          bubbles: true, cancelable: true,
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.top + rect.height / 2
+        }));
+        await new Promise(r => setTimeout(r, 1500));
+
+        // 4. Extract total from the detailed numeric display in the dropdown
+        //    The panel shows "13932" in a credits-* element (not the formatted "1.4万")
+        let total = '0';
+        const creditNumEl = Array.from(document.querySelectorAll('[class*="credits-"],[class*="creditItem-"]'))
+          .find(el => el.children.length === 0 && /^\d+$/.test(el.textContent?.trim() || ''));
+        if (creditNumEl) {
+          total = creditNumEl.textContent.trim();
+        } else {
+          // Fallback: parse formatted amount from header (e.g. "1.4万" → "14000")
+          const headerAmountEl = document.querySelector('[class*="credit-amount-text"]');
+          const raw = headerAmountEl?.textContent?.trim() || '0';
+          if (raw.includes('万')) {
+            total = String(Math.round(parseFloat(raw) * 10000));
+          } else {
+            total = raw.replace(/[^\d]/g, '') || '0';
+          }
+        }
+
+        // 5. Extract VIP level from credit-container text (e.g. "1.4万高级会员" → "高级会员")
+        const containerText = document.querySelector('[class*="credit-container"],[class*="credit-display-container"]')?.textContent?.trim() || '';
+        const vipLevel = containerText.replace(/[\d万,.]+/g, '').trim() || 'free';
+
+        // 6. Extract VIP expiry: scan all text nodes for date pattern near the dropdown
+        let vipExpire = '';
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+          const txt = node.textContent?.trim();
+          // Match "2026.04.25 14:17" or "2026-04-25" style dates (not benefit descriptions)
+          if (txt && /^\d{4}[.\-]\d{2}[.\-]\d{2}(\s\d{2}:\d{2})?$/.test(txt)) {
+            vipExpire = txt;
+            break;
+          }
+        }
 
         return [{
-          total: String(total),
-          vip_credit: String(vc),
-          purchase_credit: String(pc),
-          gift_credit: String(gc),
+          total,
+          vip_credit: '0',
+          purchase_credit: '0',
+          gift_credit: '0',
           vip_level: vipLevel,
           vip_expire: vipExpire,
         }];

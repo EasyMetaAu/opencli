@@ -33,12 +33,12 @@ opencli jimeng balance -f json
 
 | Field | Description |
 |-------|-------------|
-| `total` | 剩余积分总数 |
-| `vip_credit` | 订阅积分（来自会员套餐每月发放） |
-| `purchase_credit` | 充值积分（购买的积分） |
-| `gift_credit` | 赠送积分（活动/每日赠送） |
+| `total` | 剩余积分总数（精确数字，如 13932） |
+| `vip_credit` | 订阅积分余额（当前不从UI读取，固定为 0） |
+| `purchase_credit` | 充值积分余额（当前不从UI读取，固定为 0） |
+| `gift_credit` | 赠送积分余额（当前不从UI读取，固定为 0） |
 | `vip_level` | 会员等级：高级会员 / 标准会员 / 基础会员 / free |
-| `vip_expire` | 会员到期时间 |
+| `vip_expire` | 会员到期时间（如 2026.04.25 14:17） |
 
 ### Options (generate)
 
