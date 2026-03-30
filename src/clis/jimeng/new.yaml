@@ -37,12 +37,14 @@ pipeline:
           throw new Error('"新建会话" button not found in dropdown');
         }
 
-        // 4. Click the button (use closest parent div as click target)
+        // 4. Capture URL before click (must be before click — SPA may update URL synchronously)
+        const startUrl = location.href;
+
+        // 5. Click the button (use closest parent div as click target)
         const btn = newSessionNode.closest('[class*="create"]') || newSessionNode.closest('div') || newSessionNode;
         btn.click();
 
-        // 5. Wait for URL to change (workspace param update = new session created)
-        const startUrl = location.href;
+        // 6. Wait for URL to change (workspace param update = new session created)
         let newUrl = startUrl;
         for (let i = 0; i < 20; i++) {
           await new Promise(r => setTimeout(r, 500));
@@ -59,6 +61,13 @@ pipeline:
         const wsMatch = newUrl.match(/workspace=(\d+)/);
         if (!wsMatch) {
           throw new Error('New URL does not contain workspace ID: ' + newUrl);
+        }
+
+        // 7. Verify prompt editor is still present on the new workspace page
+        await new Promise(r => setTimeout(r, 1000));
+        const editor = document.querySelector('[contenteditable="true"],textarea,[class*="editor"],[class*="prompt-input"],[class*="promptInput"]');
+        if (!editor) {
+          throw new Error('Prompt editor not found after creating new session — page may not have loaded correctly');
         }
 
         return [{
