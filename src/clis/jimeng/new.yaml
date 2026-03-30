@@ -8,71 +8,31 @@ browser: true
 columns: [workspace_id, workspace_url]
 
 pipeline:
-  - navigate: https://jimeng.jianying.com/ai-tool/generate?type=image&workspace=0
+  - navigate: https://jimeng.jianying.com/ai-tool/generate?workspace=0
   - evaluate: |
       (async () => {
-        await new Promise(r => setTimeout(r, 5000));
+        const resp = await fetch('/mweb/v1/workspace/create?aid=513695', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        }).then(r => r.json());
 
-        // 1. Verify page loaded — check for workspace dropdown
-        const trigger = document.querySelector('[class*="workspace-select"]');
-        if (!trigger) {
-          throw new Error('Workspace selector not found — not logged in or page structure changed');
+        if (resp.ret === '1014' || resp.ret === 1014) {
+          throw new Error('Not logged in — open jimeng.jianying.com in Chrome and sign in first');
+        }
+        if (resp.ret !== '0' && resp.ret !== 0) {
+          throw new Error('workspace/create failed: ret=' + resp.ret + ' errmsg=' + (resp.errmsg || ''));
         }
 
-        // 2. Click dropdown to reveal conversation list
-        trigger.click();
-        await new Promise(r => setTimeout(r, 1500));
-
-        // 3. Find "新建会话" by text content
-        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-        let newSessionNode = null;
-        let node;
-        while ((node = walker.nextNode())) {
-          if (node.textContent?.trim() === '新建会话') {
-            newSessionNode = node.parentElement;
-            break;
-          }
-        }
-        if (!newSessionNode) {
-          throw new Error('"新建会话" button not found in dropdown');
-        }
-
-        // 4. Capture URL before click (must be before click — SPA may update URL synchronously)
-        const startUrl = location.href;
-
-        // 5. Click the button (use closest parent div as click target)
-        const btn = newSessionNode.closest('[class*="create"]') || newSessionNode.closest('div') || newSessionNode;
-        btn.click();
-
-        // 6. Wait for URL to change (workspace param update = new session created)
-        let newUrl = startUrl;
-        for (let i = 0; i < 20; i++) {
-          await new Promise(r => setTimeout(r, 500));
-          if (location.href !== startUrl) {
-            newUrl = location.href;
-            break;
-          }
-        }
-
-        if (newUrl === startUrl) {
-          throw new Error('URL did not change after clicking "新建会话" — session creation may have failed');
-        }
-
-        const wsMatch = newUrl.match(/workspace=(\d+)/);
-        if (!wsMatch) {
-          throw new Error('New URL does not contain workspace ID: ' + newUrl);
-        }
-
-        // 7. Verify prompt editor is still present on the new workspace page
-        await new Promise(r => setTimeout(r, 1000));
-        const editor = document.querySelector('[contenteditable="true"],textarea,[class*="editor"],[class*="prompt-input"],[class*="promptInput"]');
-        if (!editor) {
-          throw new Error('Prompt editor not found after creating new session — page may not have loaded correctly');
+        const wsId = resp.data?.workspace_id;
+        if (!wsId) {
+          throw new Error('workspace/create returned no workspace_id: ' + JSON.stringify(resp).substring(0, 200));
         }
 
         return [{
-          workspace_id: wsMatch[1],
-          workspace_url: newUrl,
+          workspace_id: String(wsId),
+          workspace_url: 'https://jimeng.jianying.com/ai-tool/generate?workspace=' + wsId,
         }];
       })()
   - map:

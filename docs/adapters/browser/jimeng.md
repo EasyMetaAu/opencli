@@ -50,6 +50,8 @@ opencli jimeng new -f json
 | `workspace_id` | 新会话的 workspace ID |
 | `workspace_url` | 新会话的完整 URL |
 
+> **Implementation**: Tier 2 Cookie API — 调用 `/mweb/v1/workspace/create`，无需 DOM 交互。
+
 ### Options (generate)
 
 | Option | Description |
