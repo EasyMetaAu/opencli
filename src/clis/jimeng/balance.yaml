@@ -1,0 +1,89 @@
+site: jimeng
+name: balance
+description: 即梦AI 查看积分余额与会员信息
+domain: jimeng.jianying.com
+strategy: cookie
+browser: true
+
+columns: [total, vip_level, vip_expire]
+
+pipeline:
+  - navigate: https://jimeng.jianying.com/ai-tool/generate?type=image&workspace=0
+  - evaluate: |
+      (async () => {
+        await new Promise(r => setTimeout(r, 5000));
+
+        const creditAmountEl = document.querySelector('[class*="credit-amount-container"]');
+        if (!creditAmountEl) {
+          const loginCheck = await fetch('/mweb/v1/get_user_info', {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+          }).then(r => r.json()).catch(() => null);
+          if (!loginCheck || loginCheck.ret === '1014' || loginCheck.ret === 1014) {
+            throw new Error('Not logged in — open jimeng.jianying.com in Chrome and sign in first');
+          }
+          throw new Error('Credit display not found — page structure may have changed');
+        }
+
+        // Click credit element to open the detail panel
+        const rect = creditAmountEl.getBoundingClientRect();
+        creditAmountEl.dispatchEvent(new MouseEvent('click', {
+          bubbles: true, cancelable: true,
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.top + rect.height / 2
+        }));
+        await new Promise(r => setTimeout(r, 2000));
+
+        // The detail panel is inside [class*="infos-"], which contains:
+        //   text nodes: "高级会员", "连续包月", "2026.04.25 14:17"
+        //   creditItem → credits element with exact number "13932"
+        const infosPanel = document.querySelector('[class*="infos-"]');
+
+        // Extract exact total from credits element inside the panel
+        let total = '';
+        if (infosPanel) {
+          const creditsEl = infosPanel.querySelector('[class*="credits-"]');
+          if (creditsEl) {
+            total = creditsEl.textContent?.trim() || '';
+          }
+        }
+        if (!total) {
+          // Fallback: parse formatted amount from header (e.g. "1.4万")
+          const raw = document.querySelector('[class*="credit-amount-text"]')?.textContent?.trim() || '';
+          if (raw.includes('万')) {
+            total = String(Math.round(parseFloat(raw) * 10000));
+          } else {
+            total = raw.replace(/[^\d]/g, '') || '0';
+          }
+        }
+
+        // Extract VIP level from credit-display-container
+        const displayContainer = document.querySelector('[class*="credit-display-container"]');
+        const upgradeText = displayContainer?.querySelector('[class*="upgrade-text"]');
+        const vipLevel = upgradeText?.textContent?.trim() || 'free';
+
+        // Extract VIP expiry from text nodes inside the infos panel only
+        let vipExpire = '';
+        if (infosPanel) {
+          const walker = document.createTreeWalker(infosPanel, NodeFilter.SHOW_TEXT);
+          let node;
+          while ((node = walker.nextNode())) {
+            const txt = node.textContent?.trim();
+            if (txt && /^\d{4}[.\-]\d{2}[.\-]\d{2}(\s\d{2}:\d{2})?$/.test(txt)) {
+              vipExpire = txt;
+              break;
+            }
+          }
+        }
+
+        return [{
+          total,
+          vip_level: vipLevel,
+          vip_expire: vipExpire,
+        }];
+      })()
+  - map:
+      total: ${{ item.total }}
+      vip_level: ${{ item.vip_level }}
+      vip_expire: ${{ item.vip_expire }}
