@@ -338,6 +338,9 @@ async function uploadRefImage(
     throw new ArgumentError(`参考图片文件为空: ${resolvedPath}`);
   }
 
+  // Read local image dimensions as fallback
+  const localDims = readImageDimensions(imageBuffer);
+
   // Step 0: STS2 credentials
   const credentials = await getJimengSts2(page);
 
@@ -348,7 +351,47 @@ async function uploadRefImage(
   await uploadImageFile(applyResult.uploadHost, applyResult.storeUri, applyResult.auth, imageBuffer);
 
   // Step 3: CommitImageUpload
-  return commitImageUpload(credentials, applyResult.sessionKey);
+  const result = await commitImageUpload(credentials, applyResult.sessionKey);
+
+  // Use server-reported dimensions, fallback to local reading
+  if (!result.width || !result.height) {
+    result.width = localDims.width;
+    result.height = localDims.height;
+  }
+
+  return result;
+}
+
+/** Read width/height from PNG or JPEG header without external deps. */
+function readImageDimensions(buf: Buffer): { width: number; height: number } {
+  // PNG: bytes 16-23 contain width (4B) and height (4B) in IHDR
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  }
+  // JPEG: scan for SOF0/SOF2 marker (0xFF 0xC0 or 0xFF 0xC2)
+  if (buf[0] === 0xff && buf[1] === 0xd8) {
+    let i = 2;
+    while (i < buf.length - 9) {
+      if (buf[i] === 0xff) {
+        const marker = buf[i + 1];
+        if (marker === 0xc0 || marker === 0xc2) {
+          return { width: buf.readUInt16BE(i + 7), height: buf.readUInt16BE(i + 5) };
+        }
+        const len = buf.readUInt16BE(i + 2);
+        i += 2 + len;
+      } else {
+        i++;
+      }
+    }
+  }
+  // WebP: RIFF header, VP8 chunk
+  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46) {
+    if (buf[12] === 0x56 && buf[13] === 0x50 && buf[14] === 0x38 && buf[15] === 0x20) {
+      // VP8 lossy
+      return { width: buf.readUInt16LE(26) & 0x3fff, height: buf.readUInt16LE(28) & 0x3fff };
+    }
+  }
+  return { width: 0, height: 0 };
 }
 
 // ── Draft content builder ───────────────────────────────────────────────────
