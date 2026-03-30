@@ -1,6 +1,11 @@
 site: jimeng
 name: video
-description: 即梦AI 文生视频 — 提交视频生成任务并轮询结果
+description: >-
+  即梦AI 文生视频。
+  用法: opencli jimeng video "描述" -f json |
+  等待完成: opencli jimeng video "描述" --wait 300 -f json |
+  指定模型时长: opencli jimeng video "描述" --model seedance_20 --duration 15 --ratio 9:16 -f json |
+  建议先 opencli jimeng new 创建新会话，用返回的 workspace_id 传入 --workspace
 domain: jimeng.jianying.com
 strategy: cookie
 browser: true
