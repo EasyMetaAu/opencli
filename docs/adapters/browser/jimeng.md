@@ -10,6 +10,7 @@
 | `opencli jimeng history` | 查看生成历史 |
 | `opencli jimeng balance` | 查看积分余额与会员信息 |
 | `opencli jimeng new` | 新建会话（workspace） |
+| `opencli jimeng video` | 文生视频 — 提交视频生成任务 |
 
 ## Usage Examples
 
@@ -31,6 +32,15 @@ opencli jimeng balance -f json
 
 # Create a new conversation/workspace
 opencli jimeng new -f json
+
+# Submit a video generation task (returns immediately with task_id)
+opencli jimeng video "一只猫在花园里散步" -f json
+
+# Submit and wait for completion (up to 300s)
+opencli jimeng video "日落海边" --wait 300 -f json
+
+# Use Seedance 2.0 Fast, 15s, 9:16 portrait
+opencli jimeng video "人物走路" --model seedance_20_fast --duration 15 --ratio 9:16 -f json
 ```
 
 ### Output Fields (balance)
@@ -51,6 +61,28 @@ opencli jimeng new -f json
 | `workspace_url` | 新会话的完整 URL |
 
 > **Implementation**: Tier 2 Cookie API — 调用 `/mweb/v1/workspace/create`，无需 DOM 交互。
+
+### Output Fields (video)
+
+| Field | Description |
+|-------|-------------|
+| `status` | queued / completed / timeout / failed |
+| `task_id` | 任务 ID（可用于后续查询） |
+| `video_url` | 视频 URL（完成后返回，未完成为空） |
+| `queue_position` | 队列位置（如 21161/179851） |
+
+> **Implementation**: Tier 2 Cookie API — 调用 `/mweb/v1/aigc_draft/generate` 提交，`/mweb/v1/get_history_queue_info` 轮询。
+
+### Options (video)
+
+| Option | Description |
+|--------|-------------|
+| `--prompt` | 视频描述（必填） |
+| `--model` | 模型: `seedance_20_fast` (默认), `seedance_20` |
+| `--ratio` | 宽高比: `16:9` (默认), `9:16`, `1:1` |
+| `--duration` | 时长: `4` (默认), `10`, `15` 秒 |
+| `--workspace` | workspace ID (默认 0) |
+| `--wait` | 轮询等待秒数 (默认 0 提交即返回) |
 
 ### Options (generate)
 
