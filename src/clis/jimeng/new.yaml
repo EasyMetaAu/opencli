@@ -1,0 +1,71 @@
+site: jimeng
+name: new
+description: 即梦AI 新建会话（workspace）
+domain: jimeng.jianying.com
+strategy: cookie
+browser: true
+
+columns: [workspace_id, workspace_url]
+
+pipeline:
+  - navigate: https://jimeng.jianying.com/ai-tool/generate?type=image&workspace=0
+  - evaluate: |
+      (async () => {
+        await new Promise(r => setTimeout(r, 5000));
+
+        // 1. Verify page loaded — check for workspace dropdown
+        const trigger = document.querySelector('[class*="workspace-select"]');
+        if (!trigger) {
+          throw new Error('Workspace selector not found — not logged in or page structure changed');
+        }
+
+        // 2. Click dropdown to reveal conversation list
+        trigger.click();
+        await new Promise(r => setTimeout(r, 1500));
+
+        // 3. Find "新建会话" by text content
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let newSessionNode = null;
+        let node;
+        while ((node = walker.nextNode())) {
+          if (node.textContent?.trim() === '新建会话') {
+            newSessionNode = node.parentElement;
+            break;
+          }
+        }
+        if (!newSessionNode) {
+          throw new Error('"新建会话" button not found in dropdown');
+        }
+
+        // 4. Click the button (use closest parent div as click target)
+        const btn = newSessionNode.closest('[class*="create"]') || newSessionNode.closest('div') || newSessionNode;
+        btn.click();
+
+        // 5. Wait for URL to change (workspace param update = new session created)
+        const startUrl = location.href;
+        let newUrl = startUrl;
+        for (let i = 0; i < 20; i++) {
+          await new Promise(r => setTimeout(r, 500));
+          if (location.href !== startUrl) {
+            newUrl = location.href;
+            break;
+          }
+        }
+
+        if (newUrl === startUrl) {
+          throw new Error('URL did not change after clicking "新建会话" — session creation may have failed');
+        }
+
+        const wsMatch = newUrl.match(/workspace=(\d+)/);
+        if (!wsMatch) {
+          throw new Error('New URL does not contain workspace ID: ' + newUrl);
+        }
+
+        return [{
+          workspace_id: wsMatch[1],
+          workspace_url: newUrl,
+        }];
+      })()
+  - map:
+      workspace_id: ${{ item.workspace_id }}
+      workspace_url: ${{ item.workspace_url }}
