@@ -66,7 +66,7 @@ opencli jimeng video "人物走路" --model seedance_20_fast --duration 15 --rat
 
 | Field | Description |
 |-------|-------------|
-| `status` | queued / completed / timeout / failed |
+| `status` | queued / completed / timeout |
 | `task_id` | 任务 ID（可用于后续查询） |
 | `video_url` | 视频 URL（完成后返回，未完成为空） |
 | `queue_position` | 队列位置（如 21161/179851） |

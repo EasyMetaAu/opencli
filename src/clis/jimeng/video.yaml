@@ -162,7 +162,18 @@ pipeline:
             body: JSON.stringify({ history_ids: [taskId] })
           }).then(r => r.json()).catch(() => null);
 
-          if (!queueResp || (queueResp.ret !== '0' && queueResp.ret !== 0)) continue;
+          // Network failure / empty response — retry silently
+          if (!queueResp) continue;
+
+          // Auth expired during poll — hard error, no point retrying
+          if (queueResp.ret === '1014' || queueResp.ret === 1014) {
+            throw new Error('Session expired during poll — re-login required, task_id=' + taskId);
+          }
+
+          // Other API error — hard error, don't mask as timeout
+          if (queueResp.ret !== '0' && queueResp.ret !== 0) {
+            throw new Error('get_history_queue_info failed: ret=' + queueResp.ret + ' errmsg=' + (queueResp.errmsg || '') + ', task_id=' + taskId);
+          }
 
           const taskInfo = queueResp.data?.[taskId];
 
