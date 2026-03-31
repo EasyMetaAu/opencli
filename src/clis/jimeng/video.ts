@@ -409,10 +409,11 @@ function buildDraftContent(opts: {
 
   const videoGenInput: Record<string, unknown> = {
     type: '', id: crypto.randomUUID(),
-    min_version: '3.0.5',
+    min_version: '3.3.9',
     prompt: refImage ? '' : prompt,
     video_mode: 2, fps: 24,
     duration_ms: duration * 1000,
+    idip_meta_list: [],
   };
 
   // In ref-image mode, text goes into unified_edit_input.meta_list, not prompt
@@ -472,7 +473,9 @@ function buildDraftContent(opts: {
 
   return JSON.stringify({
     type: 'draft', id: draftId,
-    min_version: '3.0.5', min_features: [], is_from_tsn: true,
+    min_version: '3.3.9',
+    min_features: refImage ? ['AIGC_Video_UnifiedEdit'] : [],
+    is_from_tsn: true,
     version: '3.3.12', main_component_id: componentId,
     component_list: [component],
   });
