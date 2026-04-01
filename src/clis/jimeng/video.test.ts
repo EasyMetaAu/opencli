@@ -568,11 +568,11 @@ describe('applyVodUploadAudio uses FileType=audio', () => {
     // The actual verification: we test via the module boundary.
     // Import the module file directly and check for the string patterns.
     const fs = await import('node:fs');
-    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
 
     // Read the source to confirm FileType=audio is present for audio function
     const sourceContent = fs.default.readFileSync(
-      path.default.resolve('/Users/lukin/Projects/opencli-ref-audio/src/clis/jimeng/video.ts'),
+      fileURLToPath(new URL('./video.ts', import.meta.url)),
       'utf8',
     );
     expect(sourceContent).toContain('FileType=audio');
@@ -581,9 +581,9 @@ describe('applyVodUploadAudio uses FileType=audio', () => {
 
   it('applyVodUpload (video) still uses FileType=video', async () => {
     const fs = await import('node:fs');
-    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
     const sourceContent = fs.default.readFileSync(
-      path.default.resolve('/Users/lukin/Projects/opencli-ref-audio/src/clis/jimeng/video.ts'),
+      fileURLToPath(new URL('./video.ts', import.meta.url)),
       'utf8',
     );
     // applyVodUpload uses FileType=video
@@ -599,9 +599,9 @@ describe('uploadRefAudio error path', () => {
     // that the error message pattern is correct. The actual error is thrown synchronously
     // before any async operations, so we verify the source code contains the pattern.
     const fs = await import('node:fs');
-    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
     const sourceContent = fs.default.readFileSync(
-      path.default.resolve('/Users/lukin/Projects/opencli-ref-audio/src/clis/jimeng/video.ts'),
+      fileURLToPath(new URL('./video.ts', import.meta.url)),
       'utf8',
     );
     expect(sourceContent).toContain('[uploadAudio]');
