@@ -16,6 +16,7 @@ import { printCompletionScript } from './completion.js';
 import { loadExternalClis, executeExternalCli, installExternalCli, registerExternalCli, isBinaryInstalled } from './external.js';
 import { registerAllCommands } from './commanderAdapter.js';
 import { EXIT_CODES, getErrorMessage } from './errors.js';
+import { daemonStatus, daemonStop, daemonRestart } from './commands/daemon.js';
 
 export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
   const program = new Command();
@@ -36,7 +37,7 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
     .option('--json', 'JSON output (deprecated)')
     .action((opts) => {
       const registry = getRegistry();
-      const commands = [...registry.values()].sort((a, b) => fullName(a).localeCompare(fullName(b)));
+      const commands = [...new Set(registry.values())].sort((a, b) => fullName(a).localeCompare(fullName(b)));
       const fmt = opts.json && opts.format === 'table' ? 'json' : opts.format;
       const isStructured = fmt === 'json' || fmt === 'yaml';
 
@@ -47,6 +48,7 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
               command: fullName(c),
               site: c.site,
               name: c.name,
+              aliases: c.aliases?.join(', ') ?? '',
               description: c.description,
               strategy: strategyLabel(c),
               browser: !!c.browser,
@@ -54,7 +56,7 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
             }));
         renderOutput(rows, {
           fmt,
-          columns: ['command', 'site', 'name', 'description', 'strategy', 'browser', 'args',
+          columns: ['command', 'site', 'name', 'aliases', 'description', 'strategy', 'browser', 'args',
                      ...(isStructured ? ['columns', 'domain'] : [])],
           title: 'opencli/list',
           source: 'opencli list',
@@ -80,7 +82,8 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
           const tag = label === 'public'
             ? chalk.green('[public]')
             : chalk.yellow(`[${label}]`);
-          console.log(`    ${cmd.name} ${tag}${cmd.description ? chalk.dim(` — ${cmd.description}`) : ''}`);
+          const aliases = cmd.aliases?.length ? chalk.dim(` (aliases: ${cmd.aliases.join(', ')})`) : '';
+          console.log(`    ${cmd.name} ${tag}${aliases}${cmd.description ? chalk.dim(` — ${cmd.description}`) : ''}`);
         }
         console.log();
       }
@@ -441,6 +444,21 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
         process.exitCode = EXIT_CODES.GENERIC_ERROR;
       }
     });
+
+  // ── Built-in: daemon ──────────────────────────────────────────────────────
+  const daemonCmd = program.command('daemon').description('Manage the opencli daemon');
+  daemonCmd
+    .command('status')
+    .description('Show daemon status')
+    .action(async () => { await daemonStatus(); });
+  daemonCmd
+    .command('stop')
+    .description('Stop the daemon')
+    .action(async () => { await daemonStop(); });
+  daemonCmd
+    .command('restart')
+    .description('Restart the daemon')
+    .action(async () => { await daemonRestart(); });
 
   // ── External CLIs ─────────────────────────────────────────────────────────
 

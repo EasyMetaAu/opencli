@@ -52,6 +52,7 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
 
   const deprecatedSuffix = cmd.deprecated ? ' [deprecated]' : '';
   const subCmd = siteCmd.command(cmd.name).description(`${cmd.description}${deprecatedSuffix}`);
+  if (cmd.aliases?.length) subCmd.aliases(cmd.aliases);
 
   // Register positional args first, then named options
   const positionalArgs: typeof cmd.args = [];
@@ -103,6 +104,9 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
       }
 
       const result = await executeCommand(cmd, kwargs, verbose);
+      if (result === null || result === undefined) {
+        return;
+      }
 
       if (verbose && (!result || (Array.isArray(result) && result.length === 0))) {
         console.error(chalk.yellow('[Verbose] Warning: Command returned an empty result.'));
@@ -293,7 +297,10 @@ export function registerAllCommands(
   program: Command,
   siteGroups: Map<string, Command>,
 ): void {
+  const seen = new Set<CliCommand>();
   for (const [, cmd] of getRegistry()) {
+    if (seen.has(cmd)) continue;
+    seen.add(cmd);
     let siteCmd = siteGroups.get(cmd.site);
     if (!siteCmd) {
       siteCmd = program.command(cmd.site).description(`${cmd.site} commands`);

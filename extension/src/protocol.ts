@@ -5,7 +5,7 @@
  * Everything else is just JS code sent via 'exec'.
  */
 
-export type Action = 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window' | 'sessions' | 'set-file-input';
+export type Action = 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window' | 'sessions' | 'set-file-input' | 'bind-current';
 
 export interface Command {
   /** Unique request ID */
@@ -26,6 +26,10 @@ export interface Command {
   index?: number;
   /** Cookie domain filter */
   domain?: string;
+  /** Optional hostname/domain to require for current-tab binding */
+  matchDomain?: string;
+  /** Optional pathname prefix to require for current-tab binding */
+  matchPathPrefix?: string;
   /** Screenshot format: png (default) or jpeg */
   format?: 'png' | 'jpeg';
   /** JPEG quality (0-100), only for jpeg format */
@@ -58,7 +62,5 @@ export const DAEMON_PING_URL = `http://${DAEMON_HOST}:${DAEMON_PORT}/ping`;
 
 /** Base reconnect delay for extension WebSocket (ms) */
 export const WS_RECONNECT_BASE_DELAY = 2000;
-/** Max reconnect delay (ms) */
-export const WS_RECONNECT_MAX_DELAY = 60000;
-/** Idle timeout before daemon auto-exits (ms) */
-export const DAEMON_IDLE_TIMEOUT = 5 * 60 * 1000;
+/** Max reconnect delay (ms) — kept short since daemon is long-lived */
+export const WS_RECONNECT_MAX_DELAY = 5000;

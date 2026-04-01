@@ -23,6 +23,7 @@ const OUTPUT = path.resolve(__dirname, '..', 'dist', 'cli-manifest.json');
 export interface ManifestEntry {
   site: string;
   name: string;
+  aliases?: string[];
   description: string;
   domain?: string;
   strategy: string;
@@ -84,6 +85,7 @@ function toManifestEntry(cmd: CliCommand, modulePath: string): ManifestEntry {
   return {
     site: cmd.site,
     name: cmd.name,
+    aliases: cmd.aliases,
     description: cmd.description ?? '',
     domain: cmd.domain,
     strategy: (cmd.strategy ?? 'public').toString().toLowerCase(),
@@ -119,6 +121,9 @@ function scanYaml(filePath: string, site: string): ManifestEntry | null {
       domain: cliDef.domain,
       strategy: strategy.toLowerCase(),
       browser,
+      aliases: isRecord(cliDef) && Array.isArray((cliDef as Record<string, unknown>).aliases)
+        ? ((cliDef as Record<string, unknown>).aliases as unknown[]).filter((value): value is string => typeof value === 'string')
+        : undefined,
       args,
       columns: cliDef.columns,
       pipeline: cliDef.pipeline,
@@ -230,7 +235,7 @@ export async function buildManifest(): Promise<ManifestEntry[]> {
     }
   }
 
-  return [...manifest.values()];
+  return [...manifest.values()].sort((a, b) => a.site.localeCompare(b.site) || a.name.localeCompare(b.name));
 }
 
 async function main(): Promise<void> {

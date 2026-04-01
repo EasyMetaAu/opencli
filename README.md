@@ -72,7 +72,8 @@ npm install -g @jackwener/opencli
 ### 3. Verify & Try
 
 ```bash
-opencli doctor   # Check extension + daemon connectivity
+opencli doctor          # Check extension + daemon connectivity
+opencli daemon status   # Check daemon state (PID, uptime, memory)
 ```
 
 **Try it out:**
@@ -117,11 +118,12 @@ git clone git@github.com:jackwener/opencli.git && cd opencli && npm install && n
 
 | Site | Commands |
 |------|----------|
-| **xiaohongshu** | `search` `feed` `user` `download` `publish` `comments` `notifications` `creator-notes` `creator-notes-summary` `creator-note-detail` `creator-profile` `creator-stats` |
+| **xiaohongshu** | `search` `note` `comments` `feed` `user` `download` `publish` `notifications` `creator-notes` `creator-notes-summary` `creator-note-detail` `creator-profile` `creator-stats` |
 | **bilibili** | `hot` `search` `history` `feed` `ranking` `download` `comments` `dynamic` `favorite` `following` `me` `subtitle` `user-videos` |
 | **tieba** | `hot` `posts` `search` `read` |
 | **twitter** | `trending` `search` `timeline` `bookmarks` `post` `download` `profile` `article` `like` `likes` `notifications` `reply` `reply-dm` `thread` `follow` `unfollow` `followers` `following` `block` `unblock` `bookmark` `unbookmark` `delete` `hide-reply` `accept` |
 | **reddit** | `hot` `frontpage` `popular` `search` `subreddit` `user` `user-posts` `user-comments` `read` `save` `saved` `subscribe` `upvote` `upvoted` `comment` |
+| **notebooklm** | `status` `list` `current` `get` `metadata` `bind-current` `use` `source-list` `source-get` `source-fulltext` `source-guide` `history` `note-list` `notes-list` `notes-get` `summary` |
 | **spotify** | `auth` `status` `play` `pause` `next` `prev` `volume` `search` `queue` `shuffle` `repeat` |
 
 66+ adapters in total — **[→ see all supported sites & commands](./docs/adapters/index.md)**
