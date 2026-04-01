@@ -416,16 +416,16 @@ export function buildDraftContent(opts: {
   ratio: string;
   duration: number;
   modelCfg: ModelConfig;
-  refImage?: { uri: string; width: number; height: number };
+  refImages?: Array<{ uri: string; width: number; height: number }>;
   firstFrame?: { uri: string; width: number; height: number };
   lastFrame?: { uri: string; width: number; height: number };
 }): string {
-  const { prompt, ratio, duration, modelCfg, refImage, firstFrame, lastFrame } = opts;
+  const { prompt, ratio, duration, modelCfg, refImages, firstFrame, lastFrame } = opts;
   const draftId = crypto.randomUUID();
   const componentId = crypto.randomUUID();
 
   // Mode detection (mutually exclusive)
-  const mode = refImage ? 'ref' : firstFrame ? (lastFrame ? 'first-last' : 'first') : 'text';
+  const mode = refImages?.length ? 'ref' : firstFrame ? (lastFrame ? 'first-last' : 'first') : 'text';
 
   const videoGenInput: Record<string, unknown> = {
     type: '', id: crypto.randomUUID(),
@@ -449,14 +449,14 @@ export function buildDraftContent(opts: {
   }
 
   // Unified reference mode: image goes to unified_edit_input
-  if (mode === 'ref' && refImage) {
+  if (mode === 'ref' && refImages?.length) {
     videoGenInput.unified_edit_input = {
       type: '', id: crypto.randomUUID(),
-      material_list: [{
+      material_list: refImages.map((image) => ({
         type: '', id: crypto.randomUUID(),
         material_type: 'image',
-        image_info: buildImageInfo(refImage),
-      }],
+        image_info: buildImageInfo(image),
+      })),
       meta_list: [{
         type: '', id: crypto.randomUUID(),
         meta_type: 'text',
@@ -554,20 +554,28 @@ function checkRet(res: Record<string, unknown>, context: string, taskId?: string
  * Throws ArgumentError for invalid combinations.
  */
 export function validateVideoParams(opts: {
-  refImagePath: string;
+  refImagePaths: string[];
   firstFramePath: string;
   lastFramePath: string;
 }): void {
-  const { refImagePath, firstFramePath, lastFramePath } = opts;
+  const { refImagePaths, firstFramePath, lastFramePath } = opts;
+  const hasRefImages = refImagePaths.length > 0;
   if (lastFramePath && !firstFramePath) {
     throw new ArgumentError('--last-frame cannot be used without --first-frame');
   }
-  if (refImagePath && firstFramePath) {
+  if (hasRefImages && firstFramePath) {
     throw new ArgumentError('--ref-image cannot be used with --first-frame (mutually exclusive modes)');
   }
-  if (refImagePath && lastFramePath) {
+  if (hasRefImages && lastFramePath) {
     throw new ArgumentError('--ref-image cannot be used with --last-frame (mutually exclusive modes)');
   }
+}
+
+export function parseRefImagePaths(refImageArg: string): string[] {
+  return refImageArg
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
 // ── Command registration ────────────────────────────────────────────────────
@@ -585,7 +593,7 @@ cli({
     { name: 'duration', type: 'int', default: 4, help: '时长（秒）: 4, 10, 15' },
     { name: 'workspace', type: 'string', default: '0', help: 'workspace ID（默认 0）' },
     { name: 'wait', type: 'int', default: 0, help: '轮询等待秒数（默认 0 提交即返回，显式传值如 300 阻塞等结果）' },
-    { name: 'ref-image', type: 'string', default: '', help: '参考图片路径（全能参考模式：图片作为风格参考）' },
+    { name: 'ref-image', type: 'string', default: '', help: '参考图片路径，支持逗号分隔多张（全能参考模式：图片作为风格参考）' },
     { name: 'first-frame', type: 'string', default: '', help: '首帧图片路径（首帧模式：图片作为视频第一帧）' },
     { name: 'last-frame', type: 'string', default: '', help: '尾帧图片路径（首尾帧模式：图片作为视频最后一帧，需配合 --first-frame）' },
   ],
@@ -599,24 +607,27 @@ cli({
     const duration = kwargs.duration as number;
     const waitSec = kwargs.wait as number;
     const workspaceId = parseInt(kwargs.workspace as string) || 0;
-    const refImagePath = kwargs['ref-image'] as string;
+    const refImagePaths = parseRefImagePaths(kwargs['ref-image'] as string);
     const firstFramePath = kwargs['first-frame'] as string;
     const lastFramePath = kwargs['last-frame'] as string;
 
     // Parameter validation: mutually exclusive modes
-    validateVideoParams({ refImagePath, firstFramePath, lastFramePath });
+    validateVideoParams({ refImagePaths, firstFramePath, lastFramePath });
 
     const modelCfg = MODELS[modelArg] || MODELS['seedance_20_fast'];
 
     // ── Phase 1: Optional image uploads ──────────────────────────────
-    let refImage: { uri: string; width: number; height: number } | undefined;
+    const refImages: Array<{ uri: string; width: number; height: number }> = [];
     let firstFrame: { uri: string; width: number; height: number } | undefined;
     let lastFrame: { uri: string; width: number; height: number } | undefined;
 
-    if (refImagePath) {
-      process.stderr.write('  上传参考图片（全能参考）...\n');
-      refImage = await uploadRefImage(page, refImagePath);
-      process.stderr.write(`  参考图片上传完成: ${refImage.uri}\n`);
+    if (refImagePaths.length > 0) {
+      process.stderr.write(`  上传参考图片（全能参考）共 ${refImagePaths.length} 张...\n`);
+      for (const refImagePath of refImagePaths) {
+        process.stderr.write(`  上传参考图片 ${refImages.length + 1}/${refImagePaths.length}...\n`);
+        refImages.push(await uploadRefImage(page, refImagePath));
+        process.stderr.write(`  上传完成: ${refImages[refImages.length - 1].uri}\n`);
+      }
     }
 
     if (firstFramePath) {
@@ -652,7 +663,7 @@ cli({
         }],
       },
       submit_id: submitId,
-      draft_content: buildDraftContent({ prompt, ratio, duration, modelCfg, refImage, firstFrame, lastFrame }),
+      draft_content: buildDraftContent({ prompt, ratio, duration, modelCfg, refImages, firstFrame, lastFrame }),
       http_common_info: { aid: 513695 },
     };
 
