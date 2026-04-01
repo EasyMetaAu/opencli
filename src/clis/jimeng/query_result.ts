@@ -75,7 +75,7 @@ cli({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data = resp.data as Record<string, any> | undefined;
       const info = data?.[taskId];
-      if (!info) return { done: false, statusText: 'not_found' };
+      if (!info) return { done: true, statusText: 'not_found' };
 
       const statusCode = info.status as number;
       const mapped = QUEUE_STATUS_MAP[statusCode];
@@ -107,9 +107,9 @@ cli({
       await new Promise((r) => setTimeout(r, pollInterval * 1000));
     }
 
-    // Timeout — still fetch whatever we have
+    // Timeout — fetch whatever we have, but don't mask not_found as timeout
     const result = await fetchResult();
-    if (result.status !== 'completed') {
+    if (result.status !== 'completed' && result.status !== 'not_found') {
       result.status = `timeout after ${waitSec}s`;
     }
     return [result];
