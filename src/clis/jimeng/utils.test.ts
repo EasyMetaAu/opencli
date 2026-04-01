@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { normalizeRecord } from './utils.js';
 
-// Import the normalizer — we re-export it for testing
-import { normalizeRecord } from './list_task.js';
+// ── Fixtures: new API schema (records_list, 2026-03+) ──────────────────────
 
-// Fixture: new API schema (records_list, 2026-03+)
 const NEW_SCHEMA_VIDEO = {
   history_record_id: '30241682199308',
   generate_type: 2,
@@ -48,7 +47,48 @@ const NEW_SCHEMA_QUEUED = {
   item_list: [],
 };
 
-// Fixture: old API schema (history_list)
+// New schema video with transcoded_video (real structure from API exploration)
+const NEW_SCHEMA_VIDEO_TRANSCODED = {
+  history_record_id: '30300252136204',
+  generate_type: 10,
+  status: 50,
+  created_time: 1774927785.416,
+  model_info: { model_name: '' },
+  draft_content: JSON.stringify({
+    type: 'draft',
+    component_list: [{
+      type: 'video_base_component',
+      abilities: {
+        gen_video: {
+          text_to_video_params: {
+            model_req_key: 'dreamina_seedance_40',
+            video_gen_inputs: [{
+              prompt: '',
+              unified_edit_input: {
+                meta_list: [{ meta_type: 'text', text: '参考图片生成视频' }],
+              },
+            }],
+          },
+        },
+      },
+    }],
+  }),
+  item_list: [{
+    common_attr: { cover_url: 'https://example.com/cover.jpg' },
+    image: undefined,
+    video: {
+      transcoded_video: {
+        '1080p': { video_url: 'https://v6-artist.vlabvod.com/video-1080p.mp4' },
+        '720p': { video_url: 'https://v6-artist.vlabvod.com/video-720p.mp4' },
+        '360p': { video_url: 'https://v6-artist.vlabvod.com/video-360p.mp4' },
+      },
+    },
+    aigc_image_params: { text2video_params: {} },
+  }],
+};
+
+// ── Fixtures: old API schema (history_list) ─────────────────────────────────
+
 const OLD_SCHEMA_IMAGE = {
   history_id: 'old-12345',
   common_attr: {
@@ -94,6 +134,8 @@ const OLD_SCHEMA_FAILED = {
   item_list: [],
 };
 
+// ── Tests ───────────────────────────────────────────────────────────────────
+
 describe('normalizeRecord', () => {
   describe('new schema (records_list)', () => {
     it('normalizes completed video', () => {
@@ -114,6 +156,7 @@ describe('normalizeRecord', () => {
       expect(result.type).toBe('image');
       expect(result.url).toBe('https://p3-dreamina-sign.byteimg.com/image.png');
       expect(result.prompt).toContain('录音室');
+      expect(result.model).toBe('图片5.0 Lite');
     });
 
     it('normalizes queued task', () => {
@@ -121,6 +164,24 @@ describe('normalizeRecord', () => {
       expect(result.task_id).toBe('30300000000000');
       expect(result.status).toBe('queued');
       expect(result.url).toBe('');
+    });
+
+    it('normalizes video with transcoded_video (prefers 1080p)', () => {
+      const result = normalizeRecord(NEW_SCHEMA_VIDEO_TRANSCODED);
+      expect(result.task_id).toBe('30300252136204');
+      expect(result.status).toBe('completed');
+      expect(result.type).toBe('video');
+      expect(result.url).toBe('https://v6-artist.vlabvod.com/video-1080p.mp4');
+    });
+
+    it('extracts prompt from draft_content for ref-image videos', () => {
+      const result = normalizeRecord(NEW_SCHEMA_VIDEO_TRANSCODED);
+      expect(result.prompt).toBe('参考图片生成视频');
+    });
+
+    it('extracts model from draft_content model_req_key', () => {
+      const result = normalizeRecord(NEW_SCHEMA_VIDEO_TRANSCODED);
+      expect(result.model).toBe('dreamina_seedance_40');
     });
   });
 
@@ -132,6 +193,7 @@ describe('normalizeRecord', () => {
       expect(result.type).toBe('image');
       expect(result.url).toBe('https://old-cdn.example.com/cat.png');
       expect(result.prompt).toContain('可爱的小猫');
+      expect(result.model).toBe('SDXL');
       expect(result.created_at).not.toBe('');
       expect(result.created_at).not.toContain('1970');
     });
@@ -154,7 +216,7 @@ describe('normalizeRecord', () => {
   });
 
   describe('prompt truncation', () => {
-    it('truncates long prompts', () => {
+    it('truncates long prompts to 50 chars', () => {
       const record = {
         ...NEW_SCHEMA_IMAGE,
         item_list: [{
