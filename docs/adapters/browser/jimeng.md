@@ -61,6 +61,9 @@ opencli jimeng video "参考图片中的人物，让她在花园散步" --ref-im
 
 # Reference image to video (全能参考，多张逗号分隔)
 opencli jimeng video "参考两张图的风格" --ref-image ./photo1.jpg,./photo2.jpg -f json
+
+# Reference video to video (全能参考，视频素材)
+opencli jimeng video "参考这段视频的风格，生成日落海边" --ref-video ./clip.mp4 -f json
 ```
 
 ### Output Fields (balance)
@@ -104,6 +107,7 @@ opencli jimeng video "参考两张图的风格" --ref-image ./photo1.jpg,./photo
 | `--workspace` | workspace ID (默认 0) |
 | `--wait` | 轮询等待秒数 (默认 0 提交即返回) |
 | `--ref-image` | 参考图片路径，支持逗号分隔多张（全能参考模式，可选） |
+| `--ref-video` | 参考视频路径（全能参考模式，单文件，与 `--ref-image` / `--first-frame` / `--last-frame` 互斥） |
 
 ### Options (generate)
 
