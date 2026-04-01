@@ -424,43 +424,39 @@ function buildDraftContent(opts: {
   const draftId = crypto.randomUUID();
   const componentId = crypto.randomUUID();
 
-  // Determine effective prompt: if firstFrame is used as reference, text goes into unified_edit_input
-  const hasReferenceImage = refImage || firstFrame;
-  const effectivePrompt = hasReferenceImage ? '' : prompt;
+  // Mode detection (mutually exclusive)
+  const mode = refImage ? 'ref' : firstFrame ? (lastFrame ? 'first-last' : 'first') : 'text';
 
   const videoGenInput: Record<string, unknown> = {
     type: '', id: crypto.randomUUID(),
     min_version: '3.3.9',
-    prompt: effectivePrompt,
+    prompt: mode === 'text' ? prompt : '',
     video_mode: 2, fps: 24,
     duration_ms: duration * 1000,
     idip_meta_list: [],
   };
 
-  // Set first_frame_image for web display (and functionality)
-  if (firstFrame) {
-    videoGenInput.first_frame_image = buildImageInfo(firstFrame);
+  // First-frame mode: image goes to first_frame_image only
+  if (mode === 'first' || mode === 'first-last') {
+    videoGenInput.first_frame_image = buildImageInfo(firstFrame!);
+    // Text prompt for first-frame mode goes into prompt field
+    videoGenInput.prompt = prompt;
   }
 
-  // Set last_frame_image for web display (optional)
-  if (lastFrame) {
+  // Last-frame mode: image goes to last_frame_image only
+  if (mode === 'first-last' && lastFrame) {
     videoGenInput.last_frame_image = buildImageInfo(lastFrame);
   }
 
-  // unified_edit_input handles both reference image modes
-  const materialList: Array<Record<string, unknown>> = [];
-  if (refImage) {
-    materialList.push({
-      type: '', id: crypto.randomUUID(),
-      material_type: 'image',
-      image_info: buildImageInfo(refImage),
-    });
-  }
-
-  if (hasReferenceImage) {
+  // Unified reference mode: image goes to unified_edit_input
+  if (mode === 'ref' && refImage) {
     videoGenInput.unified_edit_input = {
       type: '', id: crypto.randomUUID(),
-      material_list: materialList,
+      material_list: [{
+        type: '', id: crypto.randomUUID(),
+        material_type: 'image',
+        image_info: buildImageInfo(refImage),
+      }],
       meta_list: [{
         type: '', id: crypto.randomUUID(),
         meta_type: 'text',
@@ -497,7 +493,7 @@ function buildDraftContent(opts: {
 
 
   const minFeatures: string[] = [];
-  if (refImage || firstFrame) {
+  if (mode === 'ref') {
     minFeatures.push('AIGC_Video_UnifiedEdit');
   }
 
@@ -583,6 +579,14 @@ cli({
     const refImagePath = kwargs['ref-image'] as string;
     const firstFramePath = kwargs['first-frame'] as string;
     const lastFramePath = kwargs['last-frame'] as string;
+
+    // Parameter validation: mutually exclusive modes
+    if (lastFramePath && !firstFramePath) {
+      throw new ArgumentError('--last-frame cannot be used without --first-frame');
+    }
+    if (refImagePath && (firstFramePath || lastFramePath)) {
+      throw new ArgumentError('--ref-image cannot be used with --first-frame or --last-frame (mutually exclusive modes)');
+    }
 
     const modelCfg = MODELS[modelArg] || MODELS['seedance_20_fast'];
 
