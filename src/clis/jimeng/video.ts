@@ -396,7 +396,7 @@ function readImageDimensions(buf: Buffer): { width: number; height: number } {
 
 // ── Draft content builder ───────────────────────────────────────────────────
 
-function buildImageInfo(image: { uri: string; width: number; height: number }): Record<string, unknown> {
+export function buildImageInfo(image: { uri: string; width: number; height: number }): Record<string, unknown> {
   return {
     type: 'image', id: crypto.randomUUID(),
     source_from: 'upload',
@@ -411,7 +411,7 @@ function buildImageInfo(image: { uri: string; width: number; height: number }): 
   };
 }
 
-function buildDraftContent(opts: {
+export function buildDraftContent(opts: {
   prompt: string;
   ratio: string;
   duration: number;
@@ -547,6 +547,29 @@ function checkRet(res: Record<string, unknown>, context: string, taskId?: string
   }
 }
 
+// ── Parameter validation ────────────────────────────────────────────────────
+
+/**
+ * Validate that image-mode flags are mutually exclusive.
+ * Throws ArgumentError for invalid combinations.
+ */
+export function validateVideoParams(opts: {
+  refImagePath: string;
+  firstFramePath: string;
+  lastFramePath: string;
+}): void {
+  const { refImagePath, firstFramePath, lastFramePath } = opts;
+  if (lastFramePath && !firstFramePath) {
+    throw new ArgumentError('--last-frame cannot be used without --first-frame');
+  }
+  if (refImagePath && firstFramePath) {
+    throw new ArgumentError('--ref-image cannot be used with --first-frame (mutually exclusive modes)');
+  }
+  if (refImagePath && lastFramePath) {
+    throw new ArgumentError('--ref-image cannot be used with --last-frame (mutually exclusive modes)');
+  }
+}
+
 // ── Command registration ────────────────────────────────────────────────────
 
 cli({
@@ -581,12 +604,7 @@ cli({
     const lastFramePath = kwargs['last-frame'] as string;
 
     // Parameter validation: mutually exclusive modes
-    if (lastFramePath && !firstFramePath) {
-      throw new ArgumentError('--last-frame cannot be used without --first-frame');
-    }
-    if (refImagePath && (firstFramePath || lastFramePath)) {
-      throw new ArgumentError('--ref-image cannot be used with --first-frame or --last-frame (mutually exclusive modes)');
-    }
+    validateVideoParams({ refImagePath, firstFramePath, lastFramePath });
 
     const modelCfg = MODELS[modelArg] || MODELS['seedance_20_fast'];
 
