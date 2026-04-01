@@ -396,45 +396,66 @@ function readImageDimensions(buf: Buffer): { width: number; height: number } {
 
 // ── Draft content builder ───────────────────────────────────────────────────
 
-function buildDraftContent(opts: {
+export function buildImageInfo(image: { uri: string; width: number; height: number }): Record<string, unknown> {
+  return {
+    type: 'image', id: crypto.randomUUID(),
+    source_from: 'upload',
+    platform_type: 1,
+    name: '',
+    image_uri: image.uri,
+    aigc_image: { type: '', id: crypto.randomUUID() },
+    width: image.width,
+    height: image.height,
+    format: '',
+    uri: image.uri,
+  };
+}
+
+export function buildDraftContent(opts: {
   prompt: string;
   ratio: string;
   duration: number;
   modelCfg: ModelConfig;
   refImage?: { uri: string; width: number; height: number };
+  firstFrame?: { uri: string; width: number; height: number };
+  lastFrame?: { uri: string; width: number; height: number };
 }): string {
-  const { prompt, ratio, duration, modelCfg, refImage } = opts;
+  const { prompt, ratio, duration, modelCfg, refImage, firstFrame, lastFrame } = opts;
   const draftId = crypto.randomUUID();
   const componentId = crypto.randomUUID();
+
+  // Mode detection (mutually exclusive)
+  const mode = refImage ? 'ref' : firstFrame ? (lastFrame ? 'first-last' : 'first') : 'text';
 
   const videoGenInput: Record<string, unknown> = {
     type: '', id: crypto.randomUUID(),
     min_version: '3.3.9',
-    prompt: refImage ? '' : prompt,
+    prompt: mode === 'text' ? prompt : '',
     video_mode: 2, fps: 24,
     duration_ms: duration * 1000,
     idip_meta_list: [],
   };
 
-  // In ref-image mode, text goes into unified_edit_input.meta_list, not prompt
-  if (refImage) {
+  // First-frame mode: image goes to first_frame_image only
+  if (mode === 'first' || mode === 'first-last') {
+    videoGenInput.first_frame_image = buildImageInfo(firstFrame!);
+    // Text prompt for first-frame mode goes into prompt field
+    videoGenInput.prompt = prompt;
+  }
+
+  // Last-frame mode: image goes to last_frame_image only
+  if (mode === 'first-last' && lastFrame) {
+    videoGenInput.last_frame_image = buildImageInfo(lastFrame);
+  }
+
+  // Unified reference mode: image goes to unified_edit_input
+  if (mode === 'ref' && refImage) {
     videoGenInput.unified_edit_input = {
       type: '', id: crypto.randomUUID(),
       material_list: [{
         type: '', id: crypto.randomUUID(),
         material_type: 'image',
-        image_info: {
-          type: 'image', id: crypto.randomUUID(),
-          source_from: 'upload',
-          platform_type: 1,
-          name: '',
-          image_uri: refImage.uri,
-          aigc_image: { type: '', id: crypto.randomUUID() },
-          width: refImage.width,
-          height: refImage.height,
-          format: '',
-          uri: refImage.uri,
-        },
+        image_info: buildImageInfo(refImage),
       }],
       meta_list: [{
         type: '', id: crypto.randomUUID(),
@@ -471,10 +492,15 @@ function buildDraftContent(opts: {
   };
 
 
+  const minFeatures: string[] = [];
+  if (mode === 'ref') {
+    minFeatures.push('AIGC_Video_UnifiedEdit');
+  }
+
   return JSON.stringify({
     type: 'draft', id: draftId,
     min_version: '3.3.9',
-    min_features: refImage ? ['AIGC_Video_UnifiedEdit'] : [],
+    min_features: minFeatures,
     is_from_tsn: true,
     version: '3.3.12', main_component_id: componentId,
     component_list: [component],
@@ -521,12 +547,35 @@ function checkRet(res: Record<string, unknown>, context: string, taskId?: string
   }
 }
 
+// ── Parameter validation ────────────────────────────────────────────────────
+
+/**
+ * Validate that image-mode flags are mutually exclusive.
+ * Throws ArgumentError for invalid combinations.
+ */
+export function validateVideoParams(opts: {
+  refImagePath: string;
+  firstFramePath: string;
+  lastFramePath: string;
+}): void {
+  const { refImagePath, firstFramePath, lastFramePath } = opts;
+  if (lastFramePath && !firstFramePath) {
+    throw new ArgumentError('--last-frame cannot be used without --first-frame');
+  }
+  if (refImagePath && firstFramePath) {
+    throw new ArgumentError('--ref-image cannot be used with --first-frame (mutually exclusive modes)');
+  }
+  if (refImagePath && lastFramePath) {
+    throw new ArgumentError('--ref-image cannot be used with --last-frame (mutually exclusive modes)');
+  }
+}
+
 // ── Command registration ────────────────────────────────────────────────────
 
 cli({
   site: 'jimeng',
   name: 'video',
-  description: '即梦AI 视频生成 — 文生视频 / 参考图生视频',
+  description: '即梦AI 视频生成 — 文生视频 / 首帧视频 / 首尾帧视频 / 参考图生视频',
   domain: 'jimeng.jianying.com',
   strategy: Strategy.COOKIE,
   args: [
@@ -536,7 +585,9 @@ cli({
     { name: 'duration', type: 'int', default: 4, help: '时长（秒）: 4, 10, 15' },
     { name: 'workspace', type: 'string', default: '0', help: 'workspace ID（默认 0）' },
     { name: 'wait', type: 'int', default: 0, help: '轮询等待秒数（默认 0 提交即返回，显式传值如 300 阻塞等结果）' },
-    { name: 'ref-image', type: 'string', default: '', help: '参考图片路径（全能参考模式）' },
+    { name: 'ref-image', type: 'string', default: '', help: '参考图片路径（全能参考模式：图片作为风格参考）' },
+    { name: 'first-frame', type: 'string', default: '', help: '首帧图片路径（首帧模式：图片作为视频第一帧）' },
+    { name: 'last-frame', type: 'string', default: '', help: '尾帧图片路径（首尾帧模式：图片作为视频最后一帧，需配合 --first-frame）' },
   ],
   columns: ['status', 'task_id', 'video_url', 'queue_position'],
   navigateBefore: 'https://jimeng.jianying.com/ai-tool/generate?type=video&workspace=0',
@@ -549,15 +600,35 @@ cli({
     const waitSec = kwargs.wait as number;
     const workspaceId = parseInt(kwargs.workspace as string) || 0;
     const refImagePath = kwargs['ref-image'] as string;
+    const firstFramePath = kwargs['first-frame'] as string;
+    const lastFramePath = kwargs['last-frame'] as string;
+
+    // Parameter validation: mutually exclusive modes
+    validateVideoParams({ refImagePath, firstFramePath, lastFramePath });
 
     const modelCfg = MODELS[modelArg] || MODELS['seedance_20_fast'];
 
-    // ── Phase 1: Optional ref-image upload ──────────────────────────────
+    // ── Phase 1: Optional image uploads ──────────────────────────────
     let refImage: { uri: string; width: number; height: number } | undefined;
+    let firstFrame: { uri: string; width: number; height: number } | undefined;
+    let lastFrame: { uri: string; width: number; height: number } | undefined;
+
     if (refImagePath) {
-      process.stderr.write('  上传参考图片...\n');
+      process.stderr.write('  上传参考图片（全能参考）...\n');
       refImage = await uploadRefImage(page, refImagePath);
       process.stderr.write(`  参考图片上传完成: ${refImage.uri}\n`);
+    }
+
+    if (firstFramePath) {
+      process.stderr.write('  上传首帧图片...\n');
+      firstFrame = await uploadRefImage(page, firstFramePath);
+      process.stderr.write(`  首帧图片上传完成: ${firstFrame.uri}\n`);
+    }
+
+    if (lastFramePath) {
+      process.stderr.write('  上传尾帧图片...\n');
+      lastFrame = await uploadRefImage(page, lastFramePath);
+      process.stderr.write(`  尾帧图片上传完成: ${lastFrame.uri}\n`);
     }
 
     // ── Phase 2: Submit generation task ─────────────────────────────────
@@ -581,7 +652,7 @@ cli({
         }],
       },
       submit_id: submitId,
-      draft_content: buildDraftContent({ prompt, ratio, duration, modelCfg, refImage }),
+      draft_content: buildDraftContent({ prompt, ratio, duration, modelCfg, refImage, firstFrame, lastFrame }),
       http_common_info: { aid: 513695 },
     };
 
