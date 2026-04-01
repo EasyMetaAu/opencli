@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ArgumentError } from '../../errors.js';
-import { buildDraftContent, parseRefImagePaths, validateVideoParams } from './video.js';
+import { buildDraftContent, buildVideoInfo, parseRefImagePaths, validateVideoParams } from './video.js';
 
 // ── Shared fixtures ──────────────────────────────────────────────────────────
 
@@ -10,6 +10,7 @@ const BASE_OPTS = { prompt: PROMPT, ratio: '16:9', duration: 4, modelCfg: MODEL_
 
 const FAKE_IMG = { uri: 'image-uri-abc', width: 1920, height: 1080 };
 const FAKE_IMG2 = { uri: 'image-uri-xyz', width: 1280, height: 720 };
+const FAKE_VID = { vid: 'vid-abc123', fps: 30, width: 1920, height: 1080, durationMs: 5000, name: 'ref.mp4' };
 
 function parseDraft(draftContent: string) {
   const draft = JSON.parse(draftContent);
@@ -236,5 +237,115 @@ describe('buildDraftContent — first-to-last-frame mode', () => {
   it('min_features is empty', () => {
     const { draft } = parseDraft(buildDraftContent(opts));
     expect(draft.min_features).toEqual([]);
+  });
+});
+
+// ── buildVideoInfo tests ─────────────────────────────────────────────────────
+
+describe('buildVideoInfo', () => {
+  it('returns correct structure', () => {
+    const info = buildVideoInfo(FAKE_VID) as Record<string, unknown>;
+    expect(info.type).toBe('video');
+    expect(info.source_from).toBe('upload');
+    expect(info.vid).toBe(FAKE_VID.vid);
+    expect(info.fps).toBe(FAKE_VID.fps);
+    expect(info.width).toBe(FAKE_VID.width);
+    expect(info.height).toBe(FAKE_VID.height);
+    expect(info.duration).toBe(FAKE_VID.durationMs);
+    expect(info.name).toBe(FAKE_VID.name);
+  });
+
+  it('has no uri field (uses vid instead)', () => {
+    const info = buildVideoInfo(FAKE_VID) as Record<string, unknown>;
+    expect(info.uri).toBeUndefined();
+    expect(info.image_uri).toBeUndefined();
+  });
+});
+
+// ── buildDraftContent — ref-video mode ──────────────────────────────────────
+
+describe('buildDraftContent — ref-video mode', () => {
+  const opts = { ...BASE_OPTS, refVideo: FAKE_VID };
+
+  it('has unified_edit_input with material_list', () => {
+    const { videoGenInput } = parseDraft(buildDraftContent(opts));
+    expect(videoGenInput.unified_edit_input).toBeDefined();
+    const uei = videoGenInput.unified_edit_input as Record<string, unknown>;
+    expect(Array.isArray(uei.material_list)).toBe(true);
+  });
+
+  it('material_list[0] has material_type video', () => {
+    const { videoGenInput } = parseDraft(buildDraftContent(opts));
+    const uei = videoGenInput.unified_edit_input as Record<string, unknown>;
+    const material = (uei.material_list as Array<Record<string, unknown>>)[0];
+    expect(material.material_type).toBe('video');
+  });
+
+  it('video_info has correct vid', () => {
+    const { videoGenInput } = parseDraft(buildDraftContent(opts));
+    const uei = videoGenInput.unified_edit_input as Record<string, unknown>;
+    const material = (uei.material_list as Array<Record<string, unknown>>)[0];
+    const videoInfo = material.video_info as Record<string, unknown>;
+    expect(videoInfo.vid).toBe(FAKE_VID.vid);
+  });
+
+  it('video_info.duration is in milliseconds', () => {
+    const { videoGenInput } = parseDraft(buildDraftContent(opts));
+    const uei = videoGenInput.unified_edit_input as Record<string, unknown>;
+    const material = (uei.material_list as Array<Record<string, unknown>>)[0];
+    const videoInfo = material.video_info as Record<string, unknown>;
+    expect(videoInfo.duration).toBe(5000); // FAKE_VID.durationMs
+  });
+
+  it('puts prompt in unified_edit_input.meta_list', () => {
+    const { videoGenInput } = parseDraft(buildDraftContent(opts));
+    const uei = videoGenInput.unified_edit_input as Record<string, unknown>;
+    const meta = (uei.meta_list as Array<Record<string, unknown>>)[0];
+    expect(meta.text).toBe(PROMPT);
+  });
+
+  it('has no first_frame_image or last_frame_image', () => {
+    const { videoGenInput } = parseDraft(buildDraftContent(opts));
+    expect(videoGenInput.first_frame_image).toBeUndefined();
+    expect(videoGenInput.last_frame_image).toBeUndefined();
+  });
+
+  it('has no image_info (using video_info instead)', () => {
+    const { videoGenInput } = parseDraft(buildDraftContent(opts));
+    const uei = videoGenInput.unified_edit_input as Record<string, unknown>;
+    const material = (uei.material_list as Array<Record<string, unknown>>)[0];
+    expect(material.image_info).toBeUndefined();
+  });
+
+  it('includes AIGC_Video_UnifiedEdit in min_features', () => {
+    const { draft } = parseDraft(buildDraftContent(opts));
+    expect(draft.min_features).toContain('AIGC_Video_UnifiedEdit');
+  });
+});
+
+// ── validateVideoParams — ref-video mutual exclusion ────────────────────────
+
+describe('validateVideoParams — ref-video', () => {
+  it('allows ref-video only', () => {
+    expect(() => validateVideoParams({ refImagePaths: [], refVideoPath: 'ref.mp4', firstFramePath: '', lastFramePath: '' })).not.toThrow();
+  });
+
+  it('rejects --ref-video with --ref-image', () => {
+    expect(() => validateVideoParams({ refImagePaths: ['ref.png'], refVideoPath: 'ref.mp4', firstFramePath: '', lastFramePath: '' }))
+      .toThrow(ArgumentError);
+  });
+
+  it('rejects --ref-video with --first-frame', () => {
+    expect(() => validateVideoParams({ refImagePaths: [], refVideoPath: 'ref.mp4', firstFramePath: 'first.png', lastFramePath: '' }))
+      .toThrow(ArgumentError);
+  });
+
+  it('rejects --ref-video with --last-frame', () => {
+    expect(() => validateVideoParams({ refImagePaths: [], refVideoPath: 'ref.mp4', firstFramePath: '', lastFramePath: 'last.png' }))
+      .toThrow(ArgumentError);
+  });
+
+  it('allows no ref flags (text-to-video)', () => {
+    expect(() => validateVideoParams({ refImagePaths: [], refVideoPath: '', firstFramePath: '', lastFramePath: '' })).not.toThrow();
   });
 });
