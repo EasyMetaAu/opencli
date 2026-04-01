@@ -491,6 +491,161 @@ async function commitVodUpload(
   };
 }
 
+async function applyVodUploadAudio(
+  credentials: Sts2Credentials,
+  fileSize: number,
+  fileName: string,
+): Promise<VodApplyResult> {
+  const spaceName = credentials.space_name;
+  const randomStr = crypto.randomBytes(8).toString('hex');
+  const url = `${VOD_BASE}/?Action=ApplyUploadInner&Version=2020-11-19&SpaceName=${encodeURIComponent(spaceName)}&FileType=audio&IsInner=1&FileSize=${fileSize}&s=${randomStr}`;
+  const datetime = nowDatetime();
+
+  const headers = computeAws4Headers({
+    method: 'GET',
+    url,
+    headers: {},
+    body: '',
+    credentials,
+    service: 'vod',
+    region: 'cn-north-1',
+    datetime,
+  });
+
+  const res = await fetch(url, { method: 'GET', headers });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new CommandExecutionError(`ApplyUploadInner failed [applyAudio][${fileName}]: ${res.status} ${body}`);
+  }
+  const data = (await res.json()) as {
+    ResponseMetadata?: { Error?: { Code: string; Message: string } };
+    Result?: {
+      UploadNodes?: Array<{
+        UploadHost: string;
+        StoreUri: string;
+        Auth: string;
+        SessionKey: string;
+        Vid: string;
+      }>;
+    };
+  };
+
+  if (data.ResponseMetadata?.Error) {
+    const e = data.ResponseMetadata.Error;
+    throw new CommandExecutionError(`ApplyUploadInner error [applyAudio][${fileName}]: ${e.Code} ${e.Message}`);
+  }
+
+  const node = data.Result?.UploadNodes?.[0];
+  if (!node) {
+    throw new CommandExecutionError(
+      `ApplyUploadInner returned no UploadNodes [applyAudio][${fileName}]: ${JSON.stringify(data).substring(0, 300)}`,
+    );
+  }
+
+  return {
+    storeUri: node.StoreUri,
+    auth: node.Auth,
+    uploadHost: node.UploadHost,
+    sessionKey: node.SessionKey,
+    vid: node.Vid,
+  };
+}
+
+async function commitVodUploadAudio(
+  credentials: Sts2Credentials,
+  sessionKey: string,
+  fileName: string,
+): Promise<{ vid: string; durationMs: number }> {
+  const spaceName = credentials.space_name;
+  const url = `${VOD_BASE}/?Action=CommitUploadInner&Version=2020-11-19&SpaceName=${encodeURIComponent(spaceName)}`;
+  const bodyStr = JSON.stringify({ SessionKey: sessionKey, Functions: [] });
+  const datetime = nowDatetime();
+
+  const headers = computeAws4Headers({
+    method: 'POST',
+    url,
+    headers: { 'content-type': 'application/json' },
+    body: bodyStr,
+    credentials,
+    service: 'vod',
+    region: 'cn-north-1',
+    datetime,
+  });
+
+  const res = await fetch(url, { method: 'POST', headers, body: bodyStr });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new CommandExecutionError(`CommitUploadInner failed [commitAudio][${fileName}]: ${res.status} ${body}`);
+  }
+
+  const data = (await res.json()) as {
+    ResponseMetadata?: { Error?: { Code: string; Message: string } };
+    Result?: {
+      Results?: Array<{
+        Vid: string;
+        AudioMeta?: { Duration: number };
+      }>;
+    };
+  };
+
+  if (data.ResponseMetadata?.Error) {
+    const e = data.ResponseMetadata.Error;
+    throw new CommandExecutionError(`CommitUploadInner error [commitAudio][${fileName}]: ${e.Code} ${e.Message}`);
+  }
+
+  const result = data.Result?.Results?.[0];
+  if (!result?.Vid) {
+    throw new CommandExecutionError(
+      `CommitUploadInner returned no Vid [commitAudio][${fileName}]: ${JSON.stringify(data).substring(0, 300)}`,
+    );
+  }
+
+  return {
+    vid: result.Vid,
+    durationMs: result.AudioMeta?.Duration ? Math.round(result.AudioMeta.Duration * 1000) : 0,
+  };
+}
+
+/**
+ * Full VOD upload chain for audio: STS2 (scene=1) -> Apply (FileType=audio) -> Upload -> Commit.
+ * Returns vid and audio metadata for use in the draft payload.
+ */
+async function uploadRefAudio(
+  page: IPage,
+  audioPath: string,
+): Promise<{ vid: string; durationMs: number; name: string }> {
+  const resolvedPath = path.resolve(audioPath);
+  if (!fs.existsSync(resolvedPath)) {
+    throw new ArgumentError(`[uploadAudio][${path.basename(resolvedPath)}]: file not found: ${resolvedPath}`);
+  }
+
+  const audioBuffer = fs.readFileSync(resolvedPath);
+  const fileSize = audioBuffer.byteLength;
+  if (fileSize === 0) {
+    throw new ArgumentError(`[uploadAudio][${path.basename(resolvedPath)}]: file is empty: ${resolvedPath}`);
+  }
+
+  const fileName = path.basename(resolvedPath);
+
+  // Step 0: STS2 credentials (VOD scene=1)
+  const credentials = await getJimengVodSts2(page);
+
+  // Step 1: ApplyUploadInner (FileType=audio)
+  const applyResult = await applyVodUploadAudio(credentials, fileSize, fileName);
+
+  // Step 2: Upload binary (reuse existing TOS upload)
+  await uploadImageFile(applyResult.uploadHost, applyResult.storeUri, applyResult.auth, audioBuffer);
+
+  // Step 3: CommitUploadInner (AudioMeta)
+  const result = await commitVodUploadAudio(credentials, applyResult.sessionKey, fileName);
+
+  return {
+    vid: result.vid,
+    durationMs: result.durationMs,
+    name: fileName,
+  };
+}
+
 /**
  * Full VOD upload chain: STS2 (scene=1) -> Apply -> Upload -> Commit.
  * Returns vid and video metadata for use in the draft payload.
@@ -646,6 +801,17 @@ export function buildVideoInfo(video: {
   };
 }
 
+export function buildAudioInfo(audio: { vid: string; durationMs: number; name: string }): Record<string, unknown> {
+  return {
+    type: 'audio',
+    id: crypto.randomUUID(),
+    source_from: 'upload',
+    name: audio.name,
+    vid: audio.vid,
+    duration: audio.durationMs, // milliseconds
+  };
+}
+
 export function buildDraftContent(opts: {
   prompt: string;
   ratio: string;
@@ -653,15 +819,16 @@ export function buildDraftContent(opts: {
   modelCfg: ModelConfig;
   refImages?: Array<{ uri: string; width: number; height: number }>;
   refVideo?: { vid: string; fps: number; width: number; height: number; durationMs: number; name: string };
+  refAudio?: { vid: string; durationMs: number; name: string };
   firstFrame?: { uri: string; width: number; height: number };
   lastFrame?: { uri: string; width: number; height: number };
 }): string {
-  const { prompt, ratio, duration, modelCfg, refImages, refVideo, firstFrame, lastFrame } = opts;
+  const { prompt, ratio, duration, modelCfg, refImages, refVideo, refAudio, firstFrame, lastFrame } = opts;
   const draftId = crypto.randomUUID();
   const componentId = crypto.randomUUID();
 
   // Mode detection (mutually exclusive)
-  const mode = refVideo ? 'ref-video' : refImages?.length ? 'ref' : firstFrame ? (lastFrame ? 'first-last' : 'first') : 'text';
+  const mode = refAudio ? 'ref-audio' : refVideo ? 'ref-video' : refImages?.length ? 'ref' : firstFrame ? (lastFrame ? 'first-last' : 'first') : 'text';
 
   const videoGenInput: Record<string, unknown> = {
     type: '', id: crypto.randomUUID(),
@@ -718,6 +885,23 @@ export function buildDraftContent(opts: {
     };
   }
 
+  // Unified reference mode: audio goes to unified_edit_input
+  if (mode === 'ref-audio' && refAudio) {
+    videoGenInput.unified_edit_input = {
+      type: '', id: crypto.randomUUID(),
+      material_list: [{
+        type: '', id: crypto.randomUUID(),
+        material_type: 'audio',
+        audio_info: buildAudioInfo(refAudio),
+      }],
+      meta_list: [{
+        type: '', id: crypto.randomUUID(),
+        meta_type: 'text',
+        text: prompt || '参考音频生成视频',
+      }],
+    };
+  }
+
   const component: Record<string, unknown> = {
     type: 'video_base_component', id: componentId,
     min_version: '1.0.0', aigc_mode: 'workbench',
@@ -746,7 +930,7 @@ export function buildDraftContent(opts: {
 
 
   const minFeatures: string[] = [];
-  if (mode === 'ref' || mode === 'ref-video') {
+  if (mode === 'ref' || mode === 'ref-video' || mode === 'ref-audio') {
     minFeatures.push('AIGC_Video_UnifiedEdit');
   }
 
@@ -808,13 +992,15 @@ function checkRet(res: Record<string, unknown>, context: string, taskId?: string
  */
 export function validateVideoParams(opts: {
   refImagePaths: string[];
-  refVideoPath: string;
+  refVideoPath?: string;
+  refAudioPath?: string;
   firstFramePath: string;
   lastFramePath: string;
 }): void {
-  const { refImagePaths, refVideoPath, firstFramePath, lastFramePath } = opts;
+  const { refImagePaths, refVideoPath = '', refAudioPath = '', firstFramePath, lastFramePath } = opts;
   const hasRefImages = refImagePaths.length > 0;
   const hasRefVideo = refVideoPath.length > 0;
+  const hasRefAudio = refAudioPath.length > 0;
 
   if (lastFramePath && !firstFramePath) {
     throw new ArgumentError('--last-frame cannot be used without --first-frame');
@@ -833,6 +1019,18 @@ export function validateVideoParams(opts: {
   }
   if (hasRefVideo && lastFramePath) {
     throw new ArgumentError('--ref-video cannot be used with --last-frame (mutually exclusive modes)');
+  }
+  if (hasRefAudio && hasRefImages) {
+    throw new ArgumentError('--ref-audio cannot be used with --ref-image (mutually exclusive modes)');
+  }
+  if (hasRefAudio && hasRefVideo) {
+    throw new ArgumentError('--ref-audio cannot be used with --ref-video (mutually exclusive modes)');
+  }
+  if (hasRefAudio && firstFramePath) {
+    throw new ArgumentError('--ref-audio cannot be used with --first-frame (mutually exclusive modes)');
+  }
+  if (hasRefAudio && lastFramePath) {
+    throw new ArgumentError('--ref-audio cannot be used with --last-frame (mutually exclusive modes)');
   }
 }
 
@@ -860,6 +1058,7 @@ cli({
     { name: 'wait', type: 'int', default: 0, help: '轮询等待秒数（默认 0 提交即返回，显式传值如 300 阻塞等结果）' },
     { name: 'ref-image', type: 'string', default: '', help: '参考图片路径，支持逗号分隔多张（全能参考模式：图片作为风格参考）' },
     { name: 'ref-video', type: 'string', default: '', help: '参考视频路径（全能参考模式：视频作为风格参考，与 --ref-image / --first-frame / --last-frame 互斥）' },
+    { name: 'ref-audio', type: 'string', default: '', help: '参考音频路径（全能参考模式：音频作为风格参考，与 --ref-image / --ref-video / --first-frame / --last-frame 互斥）' },
     { name: 'first-frame', type: 'string', default: '', help: '首帧图片路径（首帧模式：图片作为视频第一帧）' },
     { name: 'last-frame', type: 'string', default: '', help: '尾帧图片路径（首尾帧模式：图片作为视频最后一帧，需配合 --first-frame）' },
   ],
@@ -875,17 +1074,19 @@ cli({
     const workspaceId = parseInt(kwargs.workspace as string) || 0;
     const refImagePaths = parseRefImagePaths(kwargs['ref-image'] as string);
     const refVideoPath = kwargs['ref-video'] as string;
+    const refAudioPath = kwargs['ref-audio'] as string;
     const firstFramePath = kwargs['first-frame'] as string;
     const lastFramePath = kwargs['last-frame'] as string;
 
     // Parameter validation: mutually exclusive modes
-    validateVideoParams({ refImagePaths, refVideoPath, firstFramePath, lastFramePath });
+    validateVideoParams({ refImagePaths, refVideoPath, refAudioPath, firstFramePath, lastFramePath });
 
     const modelCfg = MODELS[modelArg] || MODELS['seedance_20_fast'];
 
     // ── Phase 1: Optional uploads ─────────────────────────────────────
     const refImages: Array<{ uri: string; width: number; height: number }> = [];
     let refVideo: { vid: string; fps: number; width: number; height: number; durationMs: number; name: string } | undefined;
+    let refAudio: { vid: string; durationMs: number; name: string } | undefined;
     let firstFrame: { uri: string; width: number; height: number } | undefined;
     let lastFrame: { uri: string; width: number; height: number } | undefined;
 
@@ -902,6 +1103,12 @@ cli({
       process.stderr.write('  上传参考视频（全能参考）...\n');
       refVideo = await uploadRefVideo(page, refVideoPath);
       process.stderr.write(`  参考视频上传完成: vid=${refVideo.vid}\n`);
+    }
+
+    if (refAudioPath) {
+      process.stderr.write('  上传参考音频（全能参考）...\n');
+      refAudio = await uploadRefAudio(page, refAudioPath);
+      process.stderr.write(`  参考音频上传完成: vid=${refAudio.vid}\n`);
     }
 
     if (firstFramePath) {
@@ -937,7 +1144,7 @@ cli({
         }],
       },
       submit_id: submitId,
-      draft_content: buildDraftContent({ prompt, ratio, duration, modelCfg, refImages, refVideo, firstFrame, lastFrame }),
+      draft_content: buildDraftContent({ prompt, ratio, duration, modelCfg, refImages, refVideo, refAudio, firstFrame, lastFrame }),
       http_common_info: { aid: 513695 },
     };
 
