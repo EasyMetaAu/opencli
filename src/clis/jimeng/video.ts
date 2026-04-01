@@ -1,8 +1,10 @@
 /**
- * Jimeng AI video generation — text-to-video and reference-image-to-video.
+ * Jimeng AI video generation — text-to-video and reference-image/video-to-video.
  *
  * Phases:
- *   1. (Optional) Get STS2 upload credentials + ImageX upload chain for --ref-image
+ *   1. (Optional) Get STS2 upload credentials + upload chain for --ref-image / --ref-video
+ *      - Images: ImageX (scene=3, imagex.bytedanceapi.com)
+ *      - Videos: VOD    (scene=1, vod.bytedanceapi.com)
  *   2. Submit generation task via aigc_draft/generate
  *   3. (Optional) Poll for completion if --wait > 0
  */
@@ -52,6 +54,7 @@ const MODELS: Record<string, ModelConfig> = {
 };
 
 const IMAGEX_BASE = 'https://imagex.bytedanceapi.com';
+const VOD_BASE = 'https://vod.bytedanceapi.com';
 const JIMENG_API = '/mweb/v1';
 const COMMON_PARAMS = 'aid=513695&web_version=7.5.0&da_version=3.3.12';
 
@@ -319,6 +322,373 @@ async function commitImageUpload(
   };
 }
 
+// ── VOD upload chain (for --ref-video) ─────────────────────────────────────
+
+/** Same endpoint as image STS2, but scene=1 for VOD. */
+async function getJimengVodSts2(page: IPage): Promise<Sts2Credentials> {
+  const url = `${JIMENG_API}/get_upload_token?${COMMON_PARAMS}`;
+  const js = `
+    fetch(${JSON.stringify(url)}, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scene: 1 })
+    }).then(r => r.json())
+  `;
+  const res = (await page.evaluate(js)) as {
+    ret: string | number;
+    data?: Sts2Credentials;
+    errmsg?: string;
+  };
+
+  if (res.ret === '1014' || res.ret === 1014) {
+    throw new AuthRequiredError('jimeng.jianying.com', 'Not logged in');
+  }
+  if (res.ret !== '0' && res.ret !== 0) {
+    throw new CommandExecutionError(
+      `get_upload_token (VOD) failed: ret=${res.ret} errmsg=${res.errmsg || ''}`,
+    );
+  }
+  if (!res.data?.access_key_id) {
+    throw new CommandExecutionError('get_upload_token (VOD) returned no credentials');
+  }
+  return res.data;
+}
+
+interface VodApplyResult {
+  storeUri: string;
+  auth: string;
+  uploadHost: string;
+  sessionKey: string;
+  vid: string;
+}
+
+async function applyVodUpload(
+  credentials: Sts2Credentials,
+  fileSize: number,
+  fileName: string,
+): Promise<VodApplyResult> {
+  const spaceName = credentials.space_name;
+  const randomStr = crypto.randomBytes(8).toString('hex');
+  const url = `${VOD_BASE}/?Action=ApplyUploadInner&Version=2020-11-19&SpaceName=${encodeURIComponent(spaceName)}&FileType=video&IsInner=1&FileSize=${fileSize}&s=${randomStr}`;
+  const datetime = nowDatetime();
+
+  const headers = computeAws4Headers({
+    method: 'GET',
+    url,
+    headers: {},
+    body: '',
+    credentials,
+    service: 'vod',
+    region: 'cn-north-1',
+    datetime,
+  });
+
+  const res = await fetch(url, { method: 'GET', headers });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new CommandExecutionError(`ApplyUploadInner failed [${fileName}]: ${res.status} ${body}`);
+  }
+  const data = (await res.json()) as {
+    ResponseMetadata?: { Error?: { Code: string; Message: string } };
+    Result?: {
+      UploadNodes?: Array<{
+        UploadHost: string;
+        StoreUri: string;
+        Auth: string;
+        SessionKey: string;
+        Vid: string;
+      }>;
+    };
+  };
+
+  if (data.ResponseMetadata?.Error) {
+    const e = data.ResponseMetadata.Error;
+    throw new CommandExecutionError(`ApplyUploadInner error [${fileName}]: ${e.Code} ${e.Message}`);
+  }
+
+  const node = data.Result?.UploadNodes?.[0];
+  if (!node) {
+    throw new CommandExecutionError(
+      `ApplyUploadInner returned no UploadNodes [${fileName}]: ${JSON.stringify(data).substring(0, 300)}`,
+    );
+  }
+
+  return {
+    storeUri: node.StoreUri,
+    auth: node.Auth,
+    uploadHost: node.UploadHost,
+    sessionKey: node.SessionKey,
+    vid: node.Vid,
+  };
+}
+
+interface VodCommitResult {
+  vid: string;
+  width: number;
+  height: number;
+  durationMs: number;
+  fps: number;
+}
+
+async function commitVodUpload(
+  credentials: Sts2Credentials,
+  sessionKey: string,
+  fileName: string,
+): Promise<VodCommitResult> {
+  const spaceName = credentials.space_name;
+  const url = `${VOD_BASE}/?Action=CommitUploadInner&Version=2020-11-19&SpaceName=${encodeURIComponent(spaceName)}`;
+  const bodyStr = JSON.stringify({ SessionKey: sessionKey, Functions: [] });
+  const datetime = nowDatetime();
+
+  const headers = computeAws4Headers({
+    method: 'POST',
+    url,
+    headers: { 'content-type': 'application/json' },
+    body: bodyStr,
+    credentials,
+    service: 'vod',
+    region: 'cn-north-1',
+    datetime,
+  });
+
+  const res = await fetch(url, { method: 'POST', headers, body: bodyStr });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new CommandExecutionError(`CommitUploadInner failed [${fileName}]: ${res.status} ${body}`);
+  }
+
+  const data = (await res.json()) as {
+    ResponseMetadata?: { Error?: { Code: string; Message: string } };
+    Result?: {
+      Results?: Array<{
+        Vid: string;
+        VideoMeta?: { Width: number; Height: number; Duration: number; Fps: number };
+      }>;
+    };
+  };
+
+  if (data.ResponseMetadata?.Error) {
+    const e = data.ResponseMetadata.Error;
+    throw new CommandExecutionError(`CommitUploadInner error [${fileName}]: ${e.Code} ${e.Message}`);
+  }
+
+  const result = data.Result?.Results?.[0];
+  if (!result?.Vid) {
+    throw new CommandExecutionError(
+      `CommitUploadInner returned no Vid [${fileName}]: ${JSON.stringify(data).substring(0, 300)}`,
+    );
+  }
+
+  const meta = result.VideoMeta;
+  return {
+    vid: result.Vid,
+    width: meta?.Width || 0,
+    height: meta?.Height || 0,
+    // VOD returns Duration in seconds (float); convert to ms
+    durationMs: meta?.Duration ? Math.round(meta.Duration * 1000) : 0,
+    fps: meta?.Fps || 0,
+  };
+}
+
+async function applyVodUploadAudio(
+  credentials: Sts2Credentials,
+  fileSize: number,
+  fileName: string,
+): Promise<VodApplyResult> {
+  const spaceName = credentials.space_name;
+  const randomStr = crypto.randomBytes(8).toString('hex');
+  const url = `${VOD_BASE}/?Action=ApplyUploadInner&Version=2020-11-19&SpaceName=${encodeURIComponent(spaceName)}&FileType=audio&IsInner=1&FileSize=${fileSize}&s=${randomStr}`;
+  const datetime = nowDatetime();
+
+  const headers = computeAws4Headers({
+    method: 'GET',
+    url,
+    headers: {},
+    body: '',
+    credentials,
+    service: 'vod',
+    region: 'cn-north-1',
+    datetime,
+  });
+
+  const res = await fetch(url, { method: 'GET', headers });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new CommandExecutionError(`ApplyUploadInner failed [applyAudio][${fileName}]: ${res.status} ${body}`);
+  }
+  const data = (await res.json()) as {
+    ResponseMetadata?: { Error?: { Code: string; Message: string } };
+    Result?: {
+      UploadNodes?: Array<{
+        UploadHost: string;
+        StoreUri: string;
+        Auth: string;
+        SessionKey: string;
+        Vid: string;
+      }>;
+    };
+  };
+
+  if (data.ResponseMetadata?.Error) {
+    const e = data.ResponseMetadata.Error;
+    throw new CommandExecutionError(`ApplyUploadInner error [applyAudio][${fileName}]: ${e.Code} ${e.Message}`);
+  }
+
+  const node = data.Result?.UploadNodes?.[0];
+  if (!node) {
+    throw new CommandExecutionError(
+      `ApplyUploadInner returned no UploadNodes [applyAudio][${fileName}]: ${JSON.stringify(data).substring(0, 300)}`,
+    );
+  }
+
+  return {
+    storeUri: node.StoreUri,
+    auth: node.Auth,
+    uploadHost: node.UploadHost,
+    sessionKey: node.SessionKey,
+    vid: node.Vid,
+  };
+}
+
+async function commitVodUploadAudio(
+  credentials: Sts2Credentials,
+  sessionKey: string,
+  fileName: string,
+): Promise<{ vid: string; durationMs: number }> {
+  const spaceName = credentials.space_name;
+  const url = `${VOD_BASE}/?Action=CommitUploadInner&Version=2020-11-19&SpaceName=${encodeURIComponent(spaceName)}`;
+  const bodyStr = JSON.stringify({ SessionKey: sessionKey, Functions: [] });
+  const datetime = nowDatetime();
+
+  const headers = computeAws4Headers({
+    method: 'POST',
+    url,
+    headers: { 'content-type': 'application/json' },
+    body: bodyStr,
+    credentials,
+    service: 'vod',
+    region: 'cn-north-1',
+    datetime,
+  });
+
+  const res = await fetch(url, { method: 'POST', headers, body: bodyStr });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new CommandExecutionError(`CommitUploadInner failed [commitAudio][${fileName}]: ${res.status} ${body}`);
+  }
+
+  const data = (await res.json()) as {
+    ResponseMetadata?: { Error?: { Code: string; Message: string } };
+    Result?: {
+      Results?: Array<{
+        Vid: string;
+        AudioMeta?: { Duration: number };
+      }>;
+    };
+  };
+
+  if (data.ResponseMetadata?.Error) {
+    const e = data.ResponseMetadata.Error;
+    throw new CommandExecutionError(`CommitUploadInner error [commitAudio][${fileName}]: ${e.Code} ${e.Message}`);
+  }
+
+  const result = data.Result?.Results?.[0];
+  if (!result?.Vid) {
+    throw new CommandExecutionError(
+      `CommitUploadInner returned no Vid [commitAudio][${fileName}]: ${JSON.stringify(data).substring(0, 300)}`,
+    );
+  }
+
+  return {
+    vid: result.Vid,
+    durationMs: result.AudioMeta?.Duration ? Math.round(result.AudioMeta.Duration * 1000) : 0,
+  };
+}
+
+/**
+ * Full VOD upload chain for audio: STS2 (scene=1) -> Apply (FileType=audio) -> Upload -> Commit.
+ * Returns vid and audio metadata for use in the draft payload.
+ */
+async function uploadRefAudio(
+  page: IPage,
+  audioPath: string,
+): Promise<{ vid: string; durationMs: number; name: string }> {
+  const resolvedPath = path.resolve(audioPath);
+  if (!fs.existsSync(resolvedPath)) {
+    throw new ArgumentError(`[uploadAudio][${path.basename(resolvedPath)}]: file not found: ${resolvedPath}`);
+  }
+
+  const audioBuffer = fs.readFileSync(resolvedPath);
+  const fileSize = audioBuffer.byteLength;
+  if (fileSize === 0) {
+    throw new ArgumentError(`[uploadAudio][${path.basename(resolvedPath)}]: file is empty: ${resolvedPath}`);
+  }
+
+  const fileName = path.basename(resolvedPath);
+
+  // Step 0: STS2 credentials (VOD scene=1)
+  const credentials = await getJimengVodSts2(page);
+
+  // Step 1: ApplyUploadInner (FileType=audio)
+  const applyResult = await applyVodUploadAudio(credentials, fileSize, fileName);
+
+  // Step 2: Upload binary (reuse existing TOS upload)
+  await uploadImageFile(applyResult.uploadHost, applyResult.storeUri, applyResult.auth, audioBuffer);
+
+  // Step 3: CommitUploadInner (AudioMeta)
+  const result = await commitVodUploadAudio(credentials, applyResult.sessionKey, fileName);
+
+  return {
+    vid: result.vid,
+    durationMs: result.durationMs,
+    name: fileName,
+  };
+}
+
+/**
+ * Full VOD upload chain: STS2 (scene=1) -> Apply -> Upload -> Commit.
+ * Returns vid and video metadata for use in the draft payload.
+ */
+async function uploadRefVideo(
+  page: IPage,
+  videoPath: string,
+): Promise<{ vid: string; width: number; height: number; durationMs: number; fps: number; name: string }> {
+  const resolvedPath = path.resolve(videoPath);
+  if (!fs.existsSync(resolvedPath)) {
+    throw new ArgumentError(`参考视频文件不存在: ${resolvedPath}`);
+  }
+
+  const videoBuffer = fs.readFileSync(resolvedPath);
+  const fileSize = videoBuffer.byteLength;
+  if (fileSize === 0) {
+    throw new ArgumentError(`参考视频文件为空: ${resolvedPath}`);
+  }
+
+  const fileName = path.basename(resolvedPath);
+
+  // Step 0: STS2 credentials (VOD scene=1)
+  const credentials = await getJimengVodSts2(page);
+
+  // Step 1: ApplyUploadInner
+  const applyResult = await applyVodUpload(credentials, fileSize, fileName);
+
+  // Step 2: Upload binary (same TOS upload as images)
+  await uploadImageFile(applyResult.uploadHost, applyResult.storeUri, applyResult.auth, videoBuffer);
+
+  // Step 3: CommitUploadInner
+  const result = await commitVodUpload(credentials, applyResult.sessionKey, fileName);
+
+  return {
+    vid: result.vid,
+    width: result.width,
+    height: result.height,
+    durationMs: result.durationMs,
+    fps: result.fps,
+    name: fileName,
+  };
+}
+
 /**
  * Full ImageX upload chain: STS2 -> Apply -> Upload -> Commit.
  * Returns the image URI and dimensions for use in the draft payload.
@@ -411,21 +781,54 @@ export function buildImageInfo(image: { uri: string; width: number; height: numb
   };
 }
 
+export function buildVideoInfo(video: {
+  vid: string;
+  fps: number;
+  width: number;
+  height: number;
+  durationMs: number;
+  name: string;
+}): Record<string, unknown> {
+  return {
+    type: 'video', id: crypto.randomUUID(),
+    source_from: 'upload',
+    name: video.name,
+    vid: video.vid,
+    fps: video.fps,
+    width: video.width,
+    height: video.height,
+    duration: video.durationMs, // milliseconds
+  };
+}
+
+export function buildAudioInfo(audio: { vid: string; durationMs: number; name: string }): Record<string, unknown> {
+  return {
+    type: 'audio',
+    id: crypto.randomUUID(),
+    source_from: 'upload',
+    name: audio.name,
+    vid: audio.vid,
+    duration: audio.durationMs, // milliseconds
+  };
+}
+
 export function buildDraftContent(opts: {
   prompt: string;
   ratio: string;
   duration: number;
   modelCfg: ModelConfig;
   refImages?: Array<{ uri: string; width: number; height: number }>;
+  refVideo?: { vid: string; fps: number; width: number; height: number; durationMs: number; name: string };
+  refAudio?: { vid: string; durationMs: number; name: string };
   firstFrame?: { uri: string; width: number; height: number };
   lastFrame?: { uri: string; width: number; height: number };
 }): string {
-  const { prompt, ratio, duration, modelCfg, refImages, firstFrame, lastFrame } = opts;
+  const { prompt, ratio, duration, modelCfg, refImages, refVideo, refAudio, firstFrame, lastFrame } = opts;
   const draftId = crypto.randomUUID();
   const componentId = crypto.randomUUID();
 
   // Mode detection (mutually exclusive)
-  const mode = refImages?.length ? 'ref' : firstFrame ? (lastFrame ? 'first-last' : 'first') : 'text';
+  const mode = refAudio ? 'ref-audio' : refVideo ? 'ref-video' : refImages?.length ? 'ref' : firstFrame ? (lastFrame ? 'first-last' : 'first') : 'text';
 
   const videoGenInput: Record<string, unknown> = {
     type: '', id: crypto.randomUUID(),
@@ -465,6 +868,40 @@ export function buildDraftContent(opts: {
     };
   }
 
+  // Unified reference mode: video goes to unified_edit_input
+  if (mode === 'ref-video' && refVideo) {
+    videoGenInput.unified_edit_input = {
+      type: '', id: crypto.randomUUID(),
+      material_list: [{
+        type: '', id: crypto.randomUUID(),
+        material_type: 'video',
+        video_info: buildVideoInfo(refVideo),
+      }],
+      meta_list: [{
+        type: '', id: crypto.randomUUID(),
+        meta_type: 'text',
+        text: prompt || '参考视频生成视频',
+      }],
+    };
+  }
+
+  // Unified reference mode: audio goes to unified_edit_input
+  if (mode === 'ref-audio' && refAudio) {
+    videoGenInput.unified_edit_input = {
+      type: '', id: crypto.randomUUID(),
+      material_list: [{
+        type: '', id: crypto.randomUUID(),
+        material_type: 'audio',
+        audio_info: buildAudioInfo(refAudio),
+      }],
+      meta_list: [{
+        type: '', id: crypto.randomUUID(),
+        meta_type: 'text',
+        text: prompt || '参考音频生成视频',
+      }],
+    };
+  }
+
   const component: Record<string, unknown> = {
     type: 'video_base_component', id: componentId,
     min_version: '1.0.0', aigc_mode: 'workbench',
@@ -493,7 +930,7 @@ export function buildDraftContent(opts: {
 
 
   const minFeatures: string[] = [];
-  if (mode === 'ref') {
+  if (mode === 'ref' || mode === 'ref-video' || mode === 'ref-audio') {
     minFeatures.push('AIGC_Video_UnifiedEdit');
   }
 
@@ -550,16 +987,21 @@ function checkRet(res: Record<string, unknown>, context: string, taskId?: string
 // ── Parameter validation ────────────────────────────────────────────────────
 
 /**
- * Validate that image-mode flags are mutually exclusive.
+ * Validate that image/video-mode flags are mutually exclusive.
  * Throws ArgumentError for invalid combinations.
  */
 export function validateVideoParams(opts: {
   refImagePaths: string[];
+  refVideoPath?: string;
+  refAudioPath?: string;
   firstFramePath: string;
   lastFramePath: string;
 }): void {
-  const { refImagePaths, firstFramePath, lastFramePath } = opts;
+  const { refImagePaths, refVideoPath = '', refAudioPath = '', firstFramePath, lastFramePath } = opts;
   const hasRefImages = refImagePaths.length > 0;
+  const hasRefVideo = refVideoPath.length > 0;
+  const hasRefAudio = refAudioPath.length > 0;
+
   if (lastFramePath && !firstFramePath) {
     throw new ArgumentError('--last-frame cannot be used without --first-frame');
   }
@@ -568,6 +1010,27 @@ export function validateVideoParams(opts: {
   }
   if (hasRefImages && lastFramePath) {
     throw new ArgumentError('--ref-image cannot be used with --last-frame (mutually exclusive modes)');
+  }
+  if (hasRefVideo && hasRefImages) {
+    throw new ArgumentError('--ref-video cannot be used with --ref-image (mutually exclusive modes)');
+  }
+  if (hasRefVideo && firstFramePath) {
+    throw new ArgumentError('--ref-video cannot be used with --first-frame (mutually exclusive modes)');
+  }
+  if (hasRefVideo && lastFramePath) {
+    throw new ArgumentError('--ref-video cannot be used with --last-frame (mutually exclusive modes)');
+  }
+  if (hasRefAudio && hasRefImages) {
+    throw new ArgumentError('--ref-audio cannot be used with --ref-image (mutually exclusive modes)');
+  }
+  if (hasRefAudio && hasRefVideo) {
+    throw new ArgumentError('--ref-audio cannot be used with --ref-video (mutually exclusive modes)');
+  }
+  if (hasRefAudio && firstFramePath) {
+    throw new ArgumentError('--ref-audio cannot be used with --first-frame (mutually exclusive modes)');
+  }
+  if (hasRefAudio && lastFramePath) {
+    throw new ArgumentError('--ref-audio cannot be used with --last-frame (mutually exclusive modes)');
   }
 }
 
@@ -594,6 +1057,8 @@ cli({
     { name: 'workspace', type: 'string', default: '0', help: 'workspace ID（默认 0）' },
     { name: 'wait', type: 'int', default: 0, help: '轮询等待秒数（默认 0 提交即返回，显式传值如 300 阻塞等结果）' },
     { name: 'ref-image', type: 'string', default: '', help: '参考图片路径，支持逗号分隔多张（全能参考模式：图片作为风格参考）' },
+    { name: 'ref-video', type: 'string', default: '', help: '参考视频路径（全能参考模式：视频作为风格参考，与 --ref-image / --first-frame / --last-frame 互斥）' },
+    { name: 'ref-audio', type: 'string', default: '', help: '参考音频路径（全能参考模式：音频作为风格参考，与 --ref-image / --ref-video / --first-frame / --last-frame 互斥）' },
     { name: 'first-frame', type: 'string', default: '', help: '首帧图片路径（首帧模式：图片作为视频第一帧）' },
     { name: 'last-frame', type: 'string', default: '', help: '尾帧图片路径（首尾帧模式：图片作为视频最后一帧，需配合 --first-frame）' },
   ],
@@ -608,16 +1073,20 @@ cli({
     const waitSec = kwargs.wait as number;
     const workspaceId = parseInt(kwargs.workspace as string) || 0;
     const refImagePaths = parseRefImagePaths(kwargs['ref-image'] as string);
+    const refVideoPath = kwargs['ref-video'] as string;
+    const refAudioPath = kwargs['ref-audio'] as string;
     const firstFramePath = kwargs['first-frame'] as string;
     const lastFramePath = kwargs['last-frame'] as string;
 
     // Parameter validation: mutually exclusive modes
-    validateVideoParams({ refImagePaths, firstFramePath, lastFramePath });
+    validateVideoParams({ refImagePaths, refVideoPath, refAudioPath, firstFramePath, lastFramePath });
 
     const modelCfg = MODELS[modelArg] || MODELS['seedance_20_fast'];
 
-    // ── Phase 1: Optional image uploads ──────────────────────────────
+    // ── Phase 1: Optional uploads ─────────────────────────────────────
     const refImages: Array<{ uri: string; width: number; height: number }> = [];
+    let refVideo: { vid: string; fps: number; width: number; height: number; durationMs: number; name: string } | undefined;
+    let refAudio: { vid: string; durationMs: number; name: string } | undefined;
     let firstFrame: { uri: string; width: number; height: number } | undefined;
     let lastFrame: { uri: string; width: number; height: number } | undefined;
 
@@ -628,6 +1097,18 @@ cli({
         refImages.push(await uploadRefImage(page, refImagePath));
         process.stderr.write(`  上传完成: ${refImages[refImages.length - 1].uri}\n`);
       }
+    }
+
+    if (refVideoPath) {
+      process.stderr.write('  上传参考视频（全能参考）...\n');
+      refVideo = await uploadRefVideo(page, refVideoPath);
+      process.stderr.write(`  参考视频上传完成: vid=${refVideo.vid}\n`);
+    }
+
+    if (refAudioPath) {
+      process.stderr.write('  上传参考音频（全能参考）...\n');
+      refAudio = await uploadRefAudio(page, refAudioPath);
+      process.stderr.write(`  参考音频上传完成: vid=${refAudio.vid}\n`);
     }
 
     if (firstFramePath) {
@@ -663,7 +1144,7 @@ cli({
         }],
       },
       submit_id: submitId,
-      draft_content: buildDraftContent({ prompt, ratio, duration, modelCfg, refImages, firstFrame, lastFrame }),
+      draft_content: buildDraftContent({ prompt, ratio, duration, modelCfg, refImages, refVideo, refAudio, firstFrame, lastFrame }),
       http_common_info: { aid: 513695 },
     };
 
