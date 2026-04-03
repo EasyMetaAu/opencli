@@ -2,7 +2,7 @@ import { cli } from '../../registry.js';
 import { createRankingCliOptions } from './rankings.js';
 
 cli(createRankingCliOptions({
-  commandName: 'bestsellers',
-  listType: 'bestsellers',
-  description: 'Amazon Best Sellers pages for category candidate discovery',
+  commandName: 'new-releases',
+  listType: 'new_releases',
+  description: 'Amazon New Releases pages for early momentum discovery',
 }));
