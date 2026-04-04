@@ -189,8 +189,8 @@ opencli cascade https://api.example.com/hot
 **不要从零开始写**。先看看同站点已有哪些适配器：
 
 ```bash
-ls src/clis/<site>/    # 看看已有什么
-cat src/clis/<site>/feed.ts   # 读最相似的那个
+ls clis/<site>/    # 看看已有什么
+cat clis/<site>/feed.ts   # 读最相似的那个
 ```
 
 最高效的方式是 **复制最相似的适配器，然后改 3 个地方**：
@@ -202,7 +202,7 @@ cat src/clis/<site>/feed.ts   # 读最相似的那个
 
 写 TS 适配器之前，先看看你的目标站点有没有**现成的 helper 函数**可以复用：
 
-#### Bilibili (`src/clis/bilibili/utils.ts`)
+#### Bilibili (`clis/bilibili/utils.ts`)
 
 | 函数 | 用途 | 何时使用 |
 |------|------|----------|
@@ -227,9 +227,9 @@ cat src/clis/<site>/feed.ts   # 读最相似的那个
 
 ```
 你的 pipeline 里有 evaluate 步骤（内嵌 JS 代码）？
-  → ✅ 用 TypeScript (src/clis/<site>/<name>.ts)，保存即自动动态注册
+  → ✅ 用 TypeScript (clis/<site>/<name>.ts)，保存即自动动态注册
   → ❌ 纯声明式（navigate + tap + map + limit）？
-       → ✅ 用 YAML (src/clis/<site>/<name>.yaml)，保存即自动注册
+       → ✅ 用 YAML (clis/<site>/<name>.yaml)，保存即自动注册
 ```
 
 | 场景 | 选择 | 示例 |
@@ -266,12 +266,12 @@ func: async (page, kwargs) => {
 
 ### 方式 A: YAML Pipeline（声明式，推荐）
 
-文件路径: `src/clis/<site>/<name>.yaml`，放入即自动注册。
+文件路径: `clis/<site>/<name>.yaml`，放入即自动注册。
 
 #### Tier 1 — 公开 API 模板
 
 ```yaml
-# src/clis/v2ex/hot.yaml
+# clis/v2ex/hot.yaml
 site: v2ex
 name: hot
 description: V2EX 热门话题
@@ -301,7 +301,7 @@ columns: [rank, title, replies]
 #### Tier 2 — Cookie 认证模板（最常用）
 
 ```yaml
-# src/clis/zhihu/hot.yaml
+# clis/zhihu/hot.yaml
 site: zhihu
 name: hot
 description: 知乎热榜
@@ -342,7 +342,7 @@ columns: [rank, title, heat, answers]
 #### 进阶 — 带搜索参数
 
 ```yaml
-# src/clis/zhihu/search.yaml
+# clis/zhihu/search.yaml
 site: zhihu
 name: search
 description: 知乎搜索
@@ -394,7 +394,7 @@ columns: [rank, title, type, author, votes]
 适用于 Vue + Pinia/Vuex 的网站（如小红书），无须手动写 XHR 拦截代码：
 
 ```yaml
-# src/clis/xiaohongshu/notifications.yaml
+# clis/xiaohongshu/notifications.yaml
 site: xiaohongshu
 name: notifications
 description: "小红书通知"
@@ -449,12 +449,12 @@ pipeline:
 
 适用于需要嵌入 JS 代码读取 Pinia state、XHR 拦截、GraphQL、分页、复杂数据转换等场景。
 
-文件路径: `src/clis/<site>/<name>.ts`。文件将会在运行时被动态扫描并注册（切勿在 `index.ts` 中手动 `import`）。
+文件路径: `clis/<site>/<name>.ts`。文件将会在运行时被动态扫描并注册（切勿在 `index.ts` 中手动 `import`）。
 
 #### Tier 3 — Header 认证（Twitter）
 
 ```typescript
-// src/clis/twitter/search.ts
+// clis/twitter/search.ts
 import { cli, Strategy } from '../../src/registry.js';
 
 cli({
@@ -495,7 +495,7 @@ cli({
 #### Tier 4 — XHR/Fetch 双重拦截 (Twitter/小红书 通用模式)
 
 ```typescript
-// src/clis/xiaohongshu/user.ts
+// clis/xiaohongshu/user.ts
 import { cli, Strategy } from '../../src/registry.js';
 
 cli({
@@ -618,11 +618,11 @@ opencli mysite hot -f csv > data.csv       # 确认 CSV 可导入
 
 ## Step 5: 提交发布
 
-文件放入 `src/clis/<site>/` 即自动注册（YAML 或 TS 无需手动 import），然后：
+文件放入 `clis/<site>/` 即自动注册（YAML 或 TS 无需手动 import），然后：
 
 ```bash
 opencli list | grep mysite                            # 确认注册
-git add src/clis/mysite/ && git commit -m "feat(mysite): add hot" && git push
+git add clis/mysite/ && git commit -m "feat(mysite): add hot" && git push
 ```
 
 > **架构理念**：OpenCLI 内建 **Zero-Dependency jq** 数据流 — 所有解析在 `evaluate` 的原生 JS 内完成，外层 YAML 用 `select`/`map` 提取，无需依赖系统 `jq` 二进制。
@@ -727,7 +727,7 @@ opencli synthesize mysite                                        # 生成候选 
 opencli verify mysite/hot --smoke                                # 冒烟测试
 ```
 
-生成的候选 YAML 保存在 `.opencli/explore/mysite/candidates/`，可直接复制到 `src/clis/mysite/` 并微调。
+生成的候选 YAML 保存在 `.opencli/explore/mysite/candidates/`，可直接复制到 `clis/mysite/` 并微调。
 
 ## Record Workflow
 
@@ -800,7 +800,7 @@ pipeline:
       })()
 ```
 
-**转换为 TS CLI**（参考 `src/clis/tae/add-expense.ts` 风格）：
+**转换为 TS CLI**（参考 `clis/tae/add-expense.ts` 风格）：
 ```typescript
 import { cli, Strategy } from '../../src/registry.js';
 
@@ -840,7 +840,7 @@ cli({
 2. `captured.json` 里的真实 body 结构用于确定正确的数据路径（如 `content.operatorRecords`）
 3. tae 系统统一用 `{ success, content, errorCode, errorMsg }` 外层包裹，取数据要走 `content.*`
 4. 认证方式：cookie（`credentials: 'include'`），不需要额外 header
-5. 文件放入 `src/clis/<site>/`，无需手动注册，`npm run build` 后自动发现
+5. 文件放入 `clis/<site>/`，无需手动注册，`npm run build` 后自动发现
 
 ### 故障排查
 

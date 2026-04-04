@@ -36,8 +36,8 @@ src/
 
 | 层 | 位置 | 当前文件数 | 运行方式 | 用途 |
 |---|---|---:|---|---|
-| 单元测试 | `src/**/*.test.ts`（排除 `src/clis/**`） | - | `npm test` | 内部模块、pipeline、runtime |
-| Adapter 测试 | `src/clis/{zhihu,twitter,reddit,bilibili}/**/*.test.ts` | - | `npm run test:adapter` | 保留 4 个重点站点的 adapter 覆盖 |
+| 单元测试 | `src/**/*.test.ts`（排除 `clis/**`） | - | `npm test` | 内部模块、pipeline、runtime |
+| Adapter 测试 | `clis/{zhihu,twitter,reddit,bilibili}/**/*.test.ts` | - | `npm run test:adapter` | 保留 4 个重点站点的 adapter 覆盖 |
 | E2E 测试 | `tests/e2e/*.test.ts` | 5 | `npx vitest run tests/e2e/` | 真实 CLI 命令执行 |
 | 烟雾测试 | `tests/smoke/*.test.ts` | 1 | `npx vitest run tests/smoke/` | 外部 API 与注册完整性 |
 
@@ -51,7 +51,7 @@ src/
 |---|---|
 | 核心运行时与输出 | `src/browser.test.ts`, `src/browser/dom-snapshot.test.ts`, `src/build-manifest.test.ts`, `src/capabilityRouting.test.ts`, `src/doctor.test.ts`, `src/engine.test.ts`, `src/interceptor.test.ts`, `src/output.test.ts`, `src/plugin.test.ts`, `src/registry.test.ts`, `src/snapshotFormatter.test.ts` |
 | pipeline 与下载 | `src/download/index.test.ts`, `src/pipeline/executor.test.ts`, `src/pipeline/template.test.ts`, `src/pipeline/transform.test.ts` |
-| 聚焦 adapter 逻辑 | `src/clis/zhihu/download.test.ts`, `src/clis/twitter/timeline.test.ts`, `src/clis/reddit/read.test.ts`, `src/clis/bilibili/dynamic.test.ts` |
+| 聚焦 adapter 逻辑 | `clis/zhihu/download.test.ts`, `clis/twitter/timeline.test.ts`, `clis/reddit/read.test.ts`, `clis/bilibili/dynamic.test.ts` |
 
 这些测试覆盖的重点包括：
 
@@ -114,7 +114,7 @@ npx vitest run tests/e2e/
 npx vitest run tests/smoke/
 
 # 单个测试文件
-npx vitest run src/clis/apple-podcasts/commands.test.ts
+npx vitest run clis/apple-podcasts/commands.test.ts
 npx vitest run tests/e2e/management.test.ts
 
 # 全部测试
@@ -138,7 +138,7 @@ npx vitest src/
 
 ## 如何添加新测试
 
-### 新增 YAML Adapter（如 `src/clis/producthunt/trending.yaml`）
+### 新增 YAML Adapter（如 `clis/producthunt/trending.yaml`）
 
 1. `opencli validate` 的 E2E / smoke 测试会覆盖 adapter 结构校验
 2. 根据 adapter 类型，在对应测试文件补一个 `it()` block

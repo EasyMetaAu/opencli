@@ -30,7 +30,7 @@ This is the most common type of contribution. Start with YAML when possible, and
 
 ### YAML Adapter (Recommended for data-fetching commands)
 
-Create a file like `src/clis/<site>/<command>.yaml`:
+Create a file like `clis/<site>/<command>.yaml`:
 
 ```yaml
 site: mysite
@@ -66,11 +66,11 @@ pipeline:
 columns: [rank, title, score, url]
 ```
 
-See [`hackernews/top.yaml`](src/clis/hackernews/top.yaml) for a real example.
+See [`hackernews/top.yaml`](clis/hackernews/top.yaml) for a real example.
 
 ### TypeScript Adapter (For complex browser interactions)
 
-Create a file like `src/clis/<site>/<command>.ts`:
+Create a file like `clis/<site>/<command>.ts`:
 
 ```typescript
 import { cli, Strategy } from '../../src/registry.js';

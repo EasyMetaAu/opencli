@@ -31,9 +31,9 @@ Run `opencli list` for the live registry.
 | **[linux-do](./browser/linux-do)** | `hot` `latest` `feed` `search` `categories` `category` `tags` `topic` `user-posts` `user-topics` | 🔐 Browser |
 | **[chaoxing](./browser/chaoxing)** | `assignments` `exams` | 🔐 Browser |
 | **[grok](./browser/grok)** | `ask` | 🔐 Browser |
-| **[gemini](./browser/gemini)** | `new` `ask` `image` | 🔐 Browser |
+| **[gemini](./browser/gemini)** | `new` `ask` `image` `deep-research` `deep-research-result` | 🔐 Browser |
 | **[yuanbao](./browser/yuanbao)** | `new` `ask` | 🔐 Browser |
-| **[notebooklm](./browser/notebooklm)** | `status` `list` `open` `select` `current` `get` `metadata` `source-list` `source-get` `source-fulltext` `source-guide` `history` `note-list` `notes-list` `notes-get` `summary` | 🔐 Browser |
+| **[notebooklm](./browser/notebooklm)** | `status` `list` `open` `current` `get` `source-list` `source-get` `source-fulltext` `source-guide` `history` `note-list` `notes-get` `summary` | 🔐 Browser |
 | **[doubao](./browser/doubao)** | `status` `new` `send` `read` `ask` `history` `detail` `meeting-summary` `meeting-transcript` | 🔐 Browser |
 | **[weread](./browser/weread)** | `shelf` `search` `book` `ranking` `notebooks` `highlights` `notes` | 🔐 Browser |
 | **[douban](./browser/douban)** | `search` `top250` `subject` `photos` `download` `marks` `reviews` `movie-hot` `book-hot` | 🔐 Browser |
@@ -47,7 +47,7 @@ Run `opencli list` for the live registry.
 | **[tiktok](./browser/tiktok)** | `explore` `search` `profile` `user` `following` `follow` `unfollow` `like` `unlike` `comment` `save` `unsave` `live` `notifications` `friends` | 🔐 Browser |
 | **[google](./browser/google)** | `news` `search` `suggest` `trends` | 🌐 / 🔐 |
 | **[jd](./browser/jd)** | `item` | 🔐 Browser |
-| **[amazon](./browser/amazon)** | `bestsellers` `search` `product` `offer` `discussion` | 🔐 Browser |
+| **[amazon](./browser/amazon)** | `bestsellers` `search` `product` `offer` `discussion` `movers-shakers` `new-releases` | 🔐 Browser |
 | **[1688](./browser/1688)** | `search` `item` `store` | 🔐 Browser |
 | **[web](./browser/web)** | `read` | 🔐 Browser |
 | **[weixin](./browser/weixin)** | `download` | 🔐 Browser |

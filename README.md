@@ -132,11 +132,11 @@ git clone git@github.com:jackwener/opencli.git && cd opencli && npm install && n
 | **hupu** | `hot` `search` `detail` `mentions` `reply` `like` `unlike` |
 | **twitter** | `trending` `search` `timeline` `bookmarks` `post` `download` `profile` `article` `like` `likes` `notifications` `reply` `reply-dm` `thread` `follow` `unfollow` `followers` `following` `block` `unblock` `bookmark` `unbookmark` `delete` `hide-reply` `accept` |
 | **reddit** | `hot` `frontpage` `popular` `search` `subreddit` `read` `user` `user-posts` `user-comments` `upvote` `upvoted` `save` `saved` `comment` `subscribe` |
-| **amazon** | `bestsellers` `search` `product` `offer` `discussion` `movers-shakers` `new-releases` `rankings` |
+| **amazon** | `bestsellers` `search` `product` `offer` `discussion` `movers-shakers` `new-releases` |
 | **1688** | `search` `item` `store` |
 | **gemini** | `new` `ask` `image` `deep-research` `deep-research-result` |
 | **yuanbao** | `new` `ask` |
-| **notebooklm** | `status` `list` `open` `current` `get` `history` `summary` `note-list` `notes-get` `rpc` `source-list` `source-get` `source-fulltext` `source-guide` |
+| **notebooklm** | `status` `list` `open` `current` `get` `history` `summary` `note-list` `notes-get` `source-list` `source-get` `source-fulltext` `source-guide` |
 | **spotify** | `auth` `status` `play` `pause` `next` `prev` `volume` `search` `queue` `shuffle` `repeat` |
 | **xianyu** | `search` `item` `chat` |
 | **xiaoe** | `courses` `detail` `catalog` `play-url` `content` |
