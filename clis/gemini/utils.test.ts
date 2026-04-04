@@ -4,6 +4,7 @@ import type { GeminiTurn } from './utils.js';
 import {
   __test__,
   collectGeminiTranscriptAdditions,
+  pickGeminiDeepResearchExportUrl,
   sanitizeGeminiResponseText,
   sendGeminiMessage,
 } from './utils.js';
@@ -214,5 +215,33 @@ describe('gemini turn normalization', () => {
       { Role: 'User', Text: '请只回复：OK' },
       { Role: 'Assistant', Text: 'OK' },
     ]);
+  });
+});
+
+describe('pickGeminiDeepResearchExportUrl', () => {
+  it('prefers docs.google.com document url over sheets and noise endpoints', () => {
+    const picked = pickGeminiDeepResearchExportUrl(
+      [
+        'xhr::https://gemini.google.com/_/BardChatUi/data/batchexecute?rpcids=ESY5D',
+        'performance::https://docs.google.com/spreadsheets/d/1abc/edit',
+        'open::https://docs.google.com/document/d/1docid/edit',
+      ],
+      'https://gemini.google.com/app/abc',
+    );
+    expect(picked).toEqual({
+      url: 'https://docs.google.com/document/d/1docid/edit',
+      source: 'window-open',
+    });
+  });
+
+  it('returns none when only non-export telemetry urls are present', () => {
+    const picked = pickGeminiDeepResearchExportUrl(
+      [
+        'fetch::https://gemini.google.com/_/BardChatUi/cspreport',
+        'performance::https://www.google-analytics.com/g/collect?v=2',
+      ],
+      'https://gemini.google.com/app/abc',
+    );
+    expect(picked).toEqual({ url: '', source: 'none' });
   });
 });
