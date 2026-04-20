@@ -25,6 +25,7 @@ import { resolveTargetJs, getTextResolvedJs, getValueResolvedJs, getAttributesRe
 import { inferShape } from './browser/shape.js';
 import { assignKeys } from './browser/network-key.js';
 import { DEFAULT_TTL_MS, findEntry, loadNetworkCache, saveNetworkCache, type CachedNetworkEntry } from './browser/network-cache.js';
+import { buildHtmlTreeJs, type HtmlTreeResult } from './browser/html-tree.js';
 import { daemonStatus, daemonStop } from './commands/daemon.js';
 import { log } from './logger.js';
 
@@ -546,11 +547,102 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
       console.log(val ?? '(empty)');
     }));
 
-  addBrowserTabOption(get.command('html').option('--selector <css>', 'CSS selector scope').description('Page HTML (or scoped)'))
+  addBrowserTabOption(
+    get.command('html')
+      .option('--selector <css>', 'CSS selector scope (first match)')
+      .option('--as <format>', 'Output format: "html" (default) or "json" for structured tree', 'html')
+      .option('--max <n>', 'Max characters of raw HTML to return (0 = unlimited)', '0')
+      .description('Page HTML (or scoped); use --as json for a {tag, attrs, text, children} tree'),
+  )
     .action(browserAction(async (page, opts) => {
+      const format = String(opts.as || 'html').toLowerCase();
+      if (format !== 'html' && format !== 'json') {
+        console.log(JSON.stringify({ error: { code: 'invalid_format', message: `--as must be "html" or "json", got "${opts.as}"` } }, null, 2));
+        process.exitCode = EXIT_CODES.USAGE_ERROR;
+        return;
+      }
+
+      // `--max` is validated up-front (before touching the page) so a bad value
+      // gets the same structured error regardless of selector/format path.
+      const rawMax = String(opts.max ?? '0');
+      if (!/^\d+$/.test(rawMax)) {
+        console.log(JSON.stringify({ error: { code: 'invalid_max', message: `--max must be a non-negative integer, got "${opts.max}"` } }, null, 2));
+        process.exitCode = EXIT_CODES.USAGE_ERROR;
+        return;
+      }
+      const max = Number.parseInt(rawMax, 10);
+
+      if (format === 'json') {
+        const js = buildHtmlTreeJs({ selector: opts.selector ?? null });
+        const result = await page.evaluate(js) as HtmlTreeResult | { selector: string; invalidSelector: true; reason: string } | null;
+        if (result && typeof result === 'object' && 'invalidSelector' in result && result.invalidSelector) {
+          console.log(JSON.stringify({
+            error: { code: 'invalid_selector', message: `Selector "${opts.selector}" is not a valid CSS selector: ${result.reason}` },
+          }, null, 2));
+          process.exitCode = EXIT_CODES.USAGE_ERROR;
+          return;
+        }
+        const ok = result as HtmlTreeResult | null;
+        if (!ok || ok.matched === 0) {
+          console.log(JSON.stringify({
+            error: {
+              code: 'selector_not_found',
+              message: opts.selector
+                ? `Selector "${opts.selector}" matched 0 elements.`
+                : 'Page has no documentElement.',
+            },
+          }, null, 2));
+          process.exitCode = EXIT_CODES.USAGE_ERROR;
+          return;
+        }
+        console.log(JSON.stringify(ok, null, 2));
+        return;
+      }
+
+      // Raw HTML path — unbounded by default; --max optionally caps with a visible marker.
+      // Selector lookup is wrapped in try/catch inside page context so an invalid
+      // selector returns a structured signal instead of throwing through page.evaluate.
       const sel = opts.selector ? JSON.stringify(opts.selector) : 'null';
-      const html = await page.evaluate(`(${sel} ? document.querySelector(${sel})?.outerHTML : document.documentElement.outerHTML)?.slice(0, 50000)`);
-      console.log(html ?? '(empty)');
+      const rawResult = await page.evaluate(
+        `(() => {
+          const s = ${sel};
+          if (s) {
+            try {
+              const el = document.querySelector(s);
+              return { kind: 'ok', html: el ? el.outerHTML : null };
+            } catch (e) {
+              return { kind: 'invalid_selector', reason: (e && e.message) || String(e) };
+            }
+          }
+          return { kind: 'ok', html: document.documentElement ? document.documentElement.outerHTML : null };
+        })()`,
+      ) as { kind: 'ok'; html: string | null } | { kind: 'invalid_selector'; reason: string };
+
+      if (rawResult.kind === 'invalid_selector') {
+        console.log(JSON.stringify({
+          error: { code: 'invalid_selector', message: `Selector "${opts.selector}" is not a valid CSS selector: ${rawResult.reason}` },
+        }, null, 2));
+        process.exitCode = EXIT_CODES.USAGE_ERROR;
+        return;
+      }
+      const html = rawResult.html;
+
+      if (html === null) {
+        if (opts.selector) {
+          console.log(JSON.stringify({
+            error: { code: 'selector_not_found', message: `Selector "${opts.selector}" matched 0 elements.` },
+          }, null, 2));
+          process.exitCode = EXIT_CODES.USAGE_ERROR;
+          return;
+        }
+        console.log('(empty)');
+        return;
+      }
+      if (max > 0 && html.length > max) {
+        console.log(`<!-- opencli: truncated ${max} of ${html.length} chars; re-run without --max (or --max 0) for full -->\n${html.slice(0, max)}`);
+        return;
+      }
+      console.log(html);
     }));
 
   addBrowserTabOption(get.command('attributes').argument('<index>', 'Element index').description('Element attributes'))
