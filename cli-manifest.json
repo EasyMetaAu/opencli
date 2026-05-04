@@ -5198,12 +5198,11 @@
     ],
     "columns": [
       "rank",
+      "id",
       "title",
       "rating",
-      "quote",
-      "director",
+      "votes",
       "year",
-      "region",
       "url"
     ],
     "type": "js",
