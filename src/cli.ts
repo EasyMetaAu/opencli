@@ -22,7 +22,7 @@ import { registerAllCommands } from './commanderAdapter.js';
 import { classifyAdapter, formatRootAdapterHelpText, installStructuredHelp, rootHelpData, type RootAdapterGroups } from './help.js';
 import { EXIT_CODES, getErrorMessage, BrowserConnectError } from './errors.js';
 import { TargetError, type TargetErrorCode } from './browser/target-errors.js';
-import { resolveTargetJs, getTextResolvedJs, getValueResolvedJs, getAttributesResolvedJs, selectResolvedJs, isAutocompleteResolvedJs, clickResolvedJs, type ResolveOptions, type TargetMatchLevel } from './browser/target-resolver.js';
+import { resolveTargetJs, getTextResolvedJs, getValueResolvedJs, getAttributesResolvedJs, selectResolvedJs, isAutocompleteResolvedJs, type ResolveOptions, type TargetMatchLevel } from './browser/target-resolver.js';
 import { buildFindJs, isFindError, type FindResult, type FindError } from './browser/find.js';
 import { inferShape } from './browser/shape.js';
 import { assignKeys } from './browser/network-key.js';
@@ -1439,6 +1439,35 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
         matches_n,
         match_level,
         autocomplete: !!isAutocomplete,
+      }, null, 2));
+    }));
+
+  addBrowserTabOption(
+    browser.command('fill')
+      .argument('<target>', 'Numeric ref (from browser state / find) or CSS selector')
+      .argument('<text>', 'Text to set exactly')
+      .option('--nth <n>', 'When <target> is a multi-match CSS selector, pick the nth match (0-based)')
+      .description('Set input/textarea/contenteditable text exactly and verify the value — JSON envelope {filled, verified, text, actual}'),
+  )
+    .action(browserAction(async (page, target, text, opts) => {
+      const parsed = nthToResolveOpts(opts?.nth);
+      if ('error' in parsed) {
+        console.log(JSON.stringify({ error: { code: 'usage_error', message: parsed.error } }, null, 2));
+        process.exitCode = EXIT_CODES.USAGE_ERROR;
+        return;
+      }
+      const result = await page.fillText(String(target), String(text), parsed.opts);
+      if (!result.verified) process.exitCode = EXIT_CODES.GENERIC_ERROR;
+      console.log(JSON.stringify({
+        filled: result.filled,
+        verified: result.verified,
+        target: String(target),
+        text: String(text),
+        actual: result.actual,
+        length: result.length,
+        matches_n: result.matches_n,
+        match_level: result.match_level,
+        ...(result.mode ? { mode: result.mode } : {}),
       }, null, 2));
     }));
 
