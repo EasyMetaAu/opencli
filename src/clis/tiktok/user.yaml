@@ -177,14 +177,20 @@ pipeline:
         const secUid = await resolveSecUid();
         if (!secUid) throw new Error('Cannot resolve secUid for @' + username);
 
+        const collectFromFallbacks = async () => {
+          const initialItems = findInitialItems().map(normalizeItem).filter((item) => item.id);
+          if (initialItems.length > 0) return initialItems;
+          return collectFromSearchApi();
+        };
+
         let videos;
         try {
           videos = await collectFromItemListApi(secUid);
         } catch (err) {
           if (!(err && err.endpointName === 'post/item_list')) throw err;
-          videos = findInitialItems().map(normalizeItem).filter((item) => item.id);
-          if (videos.length === 0) videos = await collectFromSearchApi();
+          videos = await collectFromFallbacks();
         }
+        if (videos.length === 0) videos = await collectFromFallbacks();
 
         const deduped = [];
         const seenIds = new Set();
