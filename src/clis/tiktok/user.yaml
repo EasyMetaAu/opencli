@@ -23,6 +23,7 @@ pipeline:
       (async () => {
         const limit = ${{ args.limit }};
         const username = ${{ args.username | json }};
+        const normalizedUsername = String(username).replace(/^@/, '').toLowerCase();
 
         const readUniversalData = () => {
           const script = document.querySelector('#__UNIVERSAL_DATA_FOR_REHYDRATION__');
@@ -79,12 +80,19 @@ pipeline:
           return apiUser && apiUser.secUid || '';
         };
 
+        const isTargetItem = (item, secUid) => {
+          const author = item && item.author || {};
+          const authorName = String(author.uniqueId || '').toLowerCase();
+          return authorName === normalizedUsername || Boolean(secUid && author.secUid === secUid);
+        };
+
         const normalizeItem = (item) => {
           const author = item.author || {};
           const stats = item.stats || item.statsV2 || {};
+          const authorName = author.uniqueId || username;
           return {
             id: item.id || '',
-            url: item.id ? 'https://www.tiktok.com/@' + (author.uniqueId || username) + '/video/' + item.id : '',
+            url: item.id ? 'https://www.tiktok.com/@' + authorName + '/video/' + item.id : '',
             desc: (item.desc || '').replace(/\n/g, ' ').slice(0, 100),
             plays: Number(stats.playCount || stats.play_count || 0),
             likes: Number(stats.diggCount || stats.digg_count || 0),
@@ -94,14 +102,14 @@ pipeline:
           };
         };
 
-        const findInitialItems = () => {
+        const findInitialItems = (secUid) => {
           const seenObjects = new Set();
           const candidates = [];
           const visit = (value) => {
             if (!value || typeof value !== 'object' || seenObjects.has(value)) return;
             seenObjects.add(value);
             if (Array.isArray(value)) {
-              const items = value.filter((item) => item && item.id && item.createTime && item.stats);
+              const items = value.filter((item) => item && item.id && item.createTime && item.stats && isTargetItem(item, secUid));
               if (items.length > candidates.length) candidates.splice(0, candidates.length, ...items);
             }
             Object.keys(value).forEach((key) => visit(value[key]));
@@ -123,8 +131,12 @@ pipeline:
             if (msToken) url += '&msToken=' + encodeURIComponent(msToken);
 
             const data = await fetchJson(url, 'post/item_list');
-            const items = Array.isArray(data.itemList) ? data.itemList : [];
-            results.push(...items.map(normalizeItem).filter((item) => item.id));
+            if (!Array.isArray(data.itemList)) {
+              const err = new Error('TikTok user API failed: post/item_list malformed itemList');
+              err.endpointName = 'post/item_list';
+              throw err;
+            }
+            results.push(...data.itemList.map(normalizeItem).filter((item) => item.id));
 
             const nextCursor = String(data.cursor || '');
             if (!data.hasMore || !nextCursor || nextCursor === cursor) break;
@@ -133,55 +145,11 @@ pipeline:
           return results;
         };
 
-        const createExploreFetcher = async () => {
-          const iframe = document.createElement('iframe');
-          iframe.style.display = 'none';
-          iframe.src = '/explore';
-          document.body.appendChild(iframe);
-          await new Promise((resolve, reject) => {
-            iframe.onload = resolve;
-            iframe.onerror = () => reject(new Error('TikTok user API failed: explore iframe load'));
-            setTimeout(resolve, 10000);
-          });
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-          if (!iframe.contentWindow || !iframe.contentWindow.fetch) {
-            throw new Error('TikTok user API failed: explore iframe unavailable');
-          }
-          return iframe.contentWindow.fetch.bind(iframe.contentWindow);
-        };
-
-        const collectFromSearchApi = async () => {
-          const fetchFromExplore = await createExploreFetcher();
-          const results = [];
-          let offset = 0;
-          for (let page = 0; page < 3 && results.length < limit; page += 1) {
-            const count = Math.min(Math.max(limit * 2, 10), 30);
-            const url = '/api/search/general/full/?keyword=' + encodeURIComponent(username)
-              + '&offset=' + offset
-              + '&count=' + count
-              + '&aid=1988';
-            const data = await fetchJson(url, 'search/general/full', fetchFromExplore);
-            const items = (data.data || [])
-              .filter((entry) => entry.type === 1 && entry.item && (entry.item.author || {}).uniqueId === username)
-              .map((entry) => normalizeItem(entry.item))
-              .filter((item) => item.id);
-            results.push(...items);
-
-            const pageSize = Array.isArray(data.data) ? data.data.length : 0;
-            if ((!data.hasMore && !data.has_more) || pageSize === 0) break;
-            offset += pageSize;
-          }
-          return results;
-        };
 
         const secUid = await resolveSecUid();
         if (!secUid) throw new Error('Cannot resolve secUid for @' + username);
 
-        const collectFromFallbacks = async () => {
-          const initialItems = findInitialItems().map(normalizeItem).filter((item) => item.id);
-          if (initialItems.length > 0) return initialItems;
-          return collectFromSearchApi();
-        };
+        const collectFromFallbacks = () => findInitialItems(secUid).map(normalizeItem).filter((item) => item.id);
 
         let videos;
         try {
