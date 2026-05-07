@@ -119,7 +119,7 @@ export function inferCapabilityName(url: string, goal?: string): string {
 /** Infer auth strategy from detected indicators. */
 export function inferStrategy(authIndicators: string[]): string {
   if (authIndicators.includes('signature')) return 'intercept';
-  if (authIndicators.includes('bearer') || authIndicators.includes('csrf')) return 'header';
+  if (authIndicators.includes('bearer') || authIndicators.includes('csrf')) return 'cookie';
   return 'cookie';
 }
 
@@ -148,6 +148,15 @@ export function detectAuthFromContent(url: string, body: unknown): string[] {
   if (url.includes('/wbi/') || url.includes('w_rid=')) indicators.push('signature');
   if (url.includes('bearer') || url.includes('access_token')) indicators.push('bearer');
   return indicators;
+}
+
+// ── Noise filtering ─────────────────────────────────────────────────────────
+
+const NOISE_URL_PATTERN = /\/(track|log|analytics|beacon|pixel|ping|heartbeat|keep.?alive)\b/i;
+
+/** Check whether a URL looks like tracking/telemetry noise rather than a business API. */
+export function isNoiseUrl(url: string): boolean {
+  return NOISE_URL_PATTERN.test(url);
 }
 
 // ── Query param classification ──────────────────────────────────────────────

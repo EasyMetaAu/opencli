@@ -1,135 +1,89 @@
 /**
- * CLI commands for daemon lifecycle management:
- *   opencli daemon status  — show daemon state
- *   opencli daemon stop    — graceful shutdown
- *   opencli daemon restart — stop + respawn
+ * CLI commands for daemon lifecycle:
+ *   opencli daemon status — show daemon state
+ *   opencli daemon stop   — graceful shutdown
+ *   opencli daemon restart — graceful shutdown, then start a fresh daemon
  */
 
-import chalk from 'chalk';
-import { DEFAULT_DAEMON_PORT } from '../constants.js';
-
-const DAEMON_PORT = parseInt(process.env.OPENCLI_DAEMON_PORT ?? String(DEFAULT_DAEMON_PORT), 10);
-const DAEMON_URL = `http://127.0.0.1:${DAEMON_PORT}`;
-
-interface DaemonStatus {
-  ok: boolean;
-  pid: number;
-  uptime: number;
-  extensionConnected: boolean;
-  pending: number;
-  lastCliRequestTime: number;
-  memoryMB: number;
-  port: number;
-}
-
-async function fetchStatus(): Promise<DaemonStatus | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2000);
-  try {
-    const res = await fetch(`${DAEMON_URL}/status`, {
-      headers: { 'X-OpenCLI': '1' },
-      signal: controller.signal,
-    });
-    if (!res.ok) return null;
-    return await res.json() as DaemonStatus;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function requestShutdown(): Promise<boolean> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
-  try {
-    const res = await fetch(`${DAEMON_URL}/shutdown`, {
-      method: 'POST',
-      headers: { 'X-OpenCLI': '1' },
-      signal: controller.signal,
-    });
-    return res.ok;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function formatUptime(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m`;
-  return `${Math.floor(seconds)}s`;
-}
-
-function formatTimeSince(timestampMs: number): string {
-  const seconds = (Date.now() - timestampMs) / 1000;
-  if (seconds < 60) return `${Math.floor(seconds)}s ago`;
-  const m = Math.floor(seconds / 60);
-  if (m < 60) return `${m} min ago`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m ago`;
-}
+import { styleText } from 'node:util';
+import { fetchDaemonStatus, requestDaemonShutdown } from '../browser/daemon-client.js';
+import { restartDaemon } from '../browser/daemon-lifecycle.js';
+import { formatDuration } from '../download/progress.js';
+import { log } from '../logger.js';
+import { PKG_VERSION } from '../version.js';
+import { formatDaemonVersion, isDaemonStale } from '../browser/daemon-version.js';
 
 export async function daemonStatus(): Promise<void> {
-  const status = await fetchStatus();
+  const status = await fetchDaemonStatus();
   if (!status) {
-    console.log(`Daemon: ${chalk.dim('not running')}`);
+    console.log(`Daemon: ${styleText('dim', 'not running')}`);
     return;
   }
 
-  console.log(`Daemon: ${chalk.green('running')} (PID ${status.pid})`);
-  console.log(`Uptime: ${formatUptime(status.uptime)}`);
-  console.log(`Extension: ${status.extensionConnected ? chalk.green('connected') : chalk.yellow('disconnected')}`);
-  console.log(`Last CLI request: ${formatTimeSince(status.lastCliRequestTime)}`);
+  const extensionLabel = !status.extensionConnected
+    ? styleText('yellow', 'disconnected')
+    : status.extensionVersion
+      ? `${styleText('green', 'connected')} ${styleText('dim', `(v${status.extensionVersion})`)}`
+      : `${styleText('yellow', 'connected')} ${styleText('dim', '(version unknown)')}`;
+
+  const daemonVersion = formatDaemonVersion(status);
+  const stale = isDaemonStale(status, PKG_VERSION);
+  console.log(`Daemon: ${stale ? styleText('yellow', 'stale') : styleText('green', 'running')} (PID ${status.pid})`);
+  console.log(`Version: ${daemonVersion}${stale ? styleText('yellow', ` (CLI v${PKG_VERSION}; run: opencli daemon restart)`) : ''}`);
+  console.log(`Uptime: ${formatDuration(Math.round(status.uptime * 1000))}`);
+  console.log(`Extension: ${extensionLabel}`);
+  if (status.profiles && status.profiles.length > 0) {
+    console.log(`Profiles: ${status.profiles.map((profile) => {
+      const version = profile.extensionVersion ? ` v${profile.extensionVersion}` : '';
+      return `${profile.contextId}${version}`;
+    }).join(', ')}`);
+  }
   console.log(`Memory: ${status.memoryMB} MB`);
   console.log(`Port: ${status.port}`);
 }
 
 export async function daemonStop(): Promise<void> {
-  const status = await fetchStatus();
+  const status = await fetchDaemonStatus();
   if (!status) {
-    console.log(chalk.dim('Daemon is not running.'));
+    log.info('Daemon is not running.');
     return;
   }
 
-  const ok = await requestShutdown();
+  const ok = await requestDaemonShutdown();
   if (ok) {
-    console.log(chalk.green('Daemon stopped.'));
+    log.success('Daemon stopped.');
   } else {
-    console.error(chalk.red('Failed to stop daemon.'));
+    log.error('Failed to stop daemon.');
     process.exitCode = 1;
   }
 }
 
 export async function daemonRestart(): Promise<void> {
-  const status = await fetchStatus();
-  if (status) {
-    const ok = await requestShutdown();
-    if (!ok) {
-      console.error(chalk.red('Failed to stop daemon.'));
-      process.exitCode = 1;
-      return;
-    }
-    // Wait for daemon to actually exit (poll until unreachable)
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 200));
-      if (!(await fetchStatus())) break;
-    }
+  const before = await fetchDaemonStatus();
+  if (before?.profiles && before.profiles.length > 0) {
+    log.warn(`Restarting daemon will disconnect ${before.profiles.length} browser profile(s); the extension should reconnect automatically.`);
   }
 
-  // Import BrowserBridge to spawn a new daemon
-  const { BrowserBridge } = await import('../browser/mcp.js');
-  const bridge = new BrowserBridge();
-  try {
-    console.log('Starting daemon...');
-    await bridge.connect({ timeout: 10 });
-    console.log(chalk.green('Daemon restarted.'));
-  } catch (err) {
-    console.error(chalk.red(`Failed to restart daemon: ${err instanceof Error ? err.message : err}`));
+  const result = await restartDaemon();
+  if (!result.stopped) {
+    log.error('Failed to stop daemon before restart.');
     process.exitCode = 1;
+    return;
+  }
+  if (!result.status) {
+    log.error('Daemon restart timed out before the new daemon reported status.');
+    process.exitCode = 1;
+    return;
+  }
+
+  const action = result.previousStatus ? 'restarted' : 'started';
+  const version = formatDaemonVersion(result.status);
+  log.success(`Daemon ${action} on port ${result.status.port} (${version}).`);
+  if (result.status.extensionConnected) {
+    const profiles = result.status.profiles?.length ?? 0;
+    const profileText = profiles > 0 ? `; profiles connected: ${profiles}` : '';
+    log.status(`Extension connected${profileText}.`);
+  } else {
+    log.warn('Daemon is running, but the Browser Bridge extension has not connected yet.');
   }
 }

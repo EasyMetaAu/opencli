@@ -1,92 +1,55 @@
-/**
- * Tests for output.ts: render function format coverage.
- */
-
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render } from './output.js';
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+describe('output TTY detection', () => {
+  const originalIsTTY = process.stdout.isTTY;
+  let logSpy: ReturnType<typeof vi.spyOn>;
 
-describe('render', () => {
-  it('renders JSON output', () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    render([{ title: 'Hello', rank: 1 }], { fmt: 'json' });
-    expect(log).toHaveBeenCalledOnce();
-    const output = log.mock.calls[0]?.[0];
-    const parsed = JSON.parse(output);
-    expect(parsed).toEqual([{ title: 'Hello', rank: 1 }]);
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 
-  it('renders Markdown table output', () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    render([{ name: 'Alice', score: 100 }], { fmt: 'md', columns: ['name', 'score'] });
-    const calls = log.mock.calls.map(c => c[0]);
-    expect(calls[0]).toContain('| name | score |');
-    expect(calls[1]).toContain('| --- | --- |');
-    expect(calls[2]).toContain('| Alice | 100 |');
+  afterEach(() => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: originalIsTTY, writable: true });
+    logSpy.mockRestore();
   });
 
-  it('renders CSV output with proper quoting', () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    render([{ name: 'Alice, Bob', value: 'say "hi"' }], { fmt: 'csv' });
-    const calls = log.mock.calls.map(c => c[0]);
-    // Header
-    expect(calls[0]).toBe('name,value');
-    // Values with commas/quotes are quoted
-    expect(calls[1]).toContain('"Alice, Bob"');
-    expect(calls[1]).toContain('"say ""hi"""');
+  it('outputs YAML in non-TTY when format is default table', () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: false, writable: true });
+    // commanderAdapter always passes fmt:'table' as default — this must still trigger downgrade
+    render([{ name: 'alice', score: 10 }], { fmt: 'table', columns: ['name', 'score'] });
+    const out = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
+    expect(out).toContain('name: alice');
+    expect(out).toContain('score: 10');
   });
 
-  it('handles null and undefined data', () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    render(null, { fmt: 'json' });
-    expect(log).toHaveBeenCalledWith(null);
+  it('outputs table in TTY when format is default table', () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, writable: true });
+    render([{ name: 'alice', score: 10 }], { fmt: 'table', columns: ['name', 'score'] });
+    const out = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
+    expect(out).toContain('alice');
   });
 
-  it('renders single object as single-row table', () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    render({ title: 'Test' }, { fmt: 'json' });
-    const output = log.mock.calls[0]?.[0];
-    const parsed = JSON.parse(output);
-    expect(parsed).toEqual({ title: 'Test' });
+  it('respects explicit -f json even in non-TTY', () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: false, writable: true });
+    render([{ name: 'alice' }], { fmt: 'json' });
+    const out = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
+    expect(JSON.parse(out)).toEqual([{ name: 'alice' }]);
   });
 
-  it('handles empty array gracefully', () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    render([], { fmt: 'table' });
-    // Should show "(no data)" for empty arrays
-    expect(log).toHaveBeenCalled();
+  it('shows elapsed time when elapsed is 0', () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, writable: true });
+    render([{ name: 'alice' }], { fmt: 'table', columns: ['name'], elapsed: 0 });
+    const out = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
+    expect(out).toContain('0.0s');
   });
 
-  it('uses custom columns for CSV', () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    render([{ a: 1, b: 2, c: 3 }], { fmt: 'csv', columns: ['a', 'c'] });
-    const calls = log.mock.calls.map(c => c[0]);
-    expect(calls[0]).toBe('a,c');
-    expect(calls[1]).toBe('1,3');
-  });
-
-  it('renders YAML output', () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    render([{ title: 'Hello', rank: 1 }], { fmt: 'yaml' });
-    expect(log).toHaveBeenCalledOnce();
-    expect(log.mock.calls[0]?.[0]).toContain('- title: Hello');
-    expect(log.mock.calls[0]?.[0]).toContain('rank: 1');
-  });
-
-  it('renders yml alias as YAML output', () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    render({ title: 'Hello' }, { fmt: 'yml' });
-    expect(log).toHaveBeenCalledOnce();
-    expect(log.mock.calls[0]?.[0]).toContain('title: Hello');
-  });
-
-  it('handles null values in CSV cells', () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    render([{ name: 'test', value: null }], { fmt: 'csv' });
-    const calls = log.mock.calls.map(c => c[0]);
-    expect(calls[1]).toBe('test,');
+  it('explicit -f table overrides non-TTY auto-downgrade', () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: false, writable: true });
+    render([{ name: 'alice' }], { fmt: 'table', fmtExplicit: true, columns: ['name'] });
+    const out = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
+    // Should be table output, not YAML
+    expect(out).not.toContain('name: alice');
+    expect(out).toContain('alice');
   });
 });

@@ -3,7 +3,7 @@
  *
  * Uses raw stdin mode + ANSI escape codes for interactive prompts.
  */
-import chalk from 'chalk';
+import { styleText } from 'node:util';
 import { EXIT_CODES } from './errors.js';
 
 export interface CheckboxItem {
@@ -43,11 +43,11 @@ export async function checkboxPrompt(
   function colorStatus(status: string | undefined, color: CheckboxItem['statusColor']): string {
     if (!status) return '';
     switch (color) {
-      case 'green': return chalk.green(status);
-      case 'yellow': return chalk.yellow(status);
-      case 'red': return chalk.red(status);
-      case 'dim': return chalk.dim(status);
-      default: return chalk.dim(status);
+      case 'green': return styleText('green', status);
+      case 'yellow': return styleText('yellow', status);
+      case 'red': return styleText('red', status);
+      case 'dim': return styleText('dim', status);
+      default: return styleText('dim', status);
     }
   }
 
@@ -56,19 +56,19 @@ export async function checkboxPrompt(
     let out = '';
 
     if (opts.title) {
-      out += `\n${chalk.bold(opts.title)}\n\n`;
+      out += `\n${styleText('bold', opts.title)}\n\n`;
     }
 
     for (let i = 0; i < state.length; i++) {
       const item = state[i];
-      const pointer = i === cursor ? chalk.cyan('❯') : ' ';
-      const checkbox = item.checked ? chalk.green('◉') : chalk.dim('○');
-      const label = i === cursor ? chalk.bold(item.label) : item.label;
+      const pointer = i === cursor ? styleText('cyan', '❯') : ' ';
+      const checkbox = item.checked ? styleText('green', '◉') : styleText('dim', '○');
+      const label = i === cursor ? styleText('bold', item.label) : item.label;
       const status = colorStatus(item.status, item.statusColor);
       out += `  ${pointer} ${checkbox} ${label}${status ? `  ${status}` : ''}\n`;
     }
 
-    out += `\n  ${chalk.dim('↑↓ navigate  ·  Space toggle  ·  a all  ·  Enter confirm  ·  q cancel')}\n`;
+    out += `\n  ${styleText('dim', '↑↓ navigate  ·  Space toggle  ·  a all  ·  Enter confirm  ·  q cancel')}\n`;
 
     return out;
   }
@@ -146,7 +146,7 @@ export async function checkboxPrompt(
         cleanup();
         const selected = state.filter(i => i.checked).map(i => i.value);
         // Show summary
-        stdout.write(`  ${chalk.green('✓')} ${chalk.bold(`${selected.length} file(s) selected`)}\n\n`);
+        stdout.write(`  ${styleText('green', '✓')} ${styleText('bold', `${selected.length} file(s) selected`)}\n\n`);
         resolve(selected);
         return;
       }
@@ -154,7 +154,7 @@ export async function checkboxPrompt(
       // q / Esc — cancel
       if (key === 'q' || key === '\x1b') {
         cleanup();
-        stdout.write(`  ${chalk.yellow('✗')} ${chalk.dim('Cancelled')}\n\n`);
+        stdout.write(`  ${styleText('yellow', '✗')} ${styleText('dim', 'Cancelled')}\n\n`);
         resolve([]);
         return;
       }
@@ -168,5 +168,70 @@ export async function checkboxPrompt(
 
     stdin.on('data', onData);
     draw();
+  });
+}
+
+/**
+ * Simple yes/no confirmation prompt.
+ *
+ * In non-TTY environments, returns `defaultYes` (defaults to true) without blocking.
+ * In TTY, waits for a single keypress: y/Enter → true, n/Esc/q → false.
+ */
+export async function confirmPrompt(
+  message: string,
+  defaultYes: boolean = true,
+): Promise<boolean> {
+  const { stdin, stdout } = process;
+  if (!stdin.isTTY) return defaultYes;
+
+  const hint = defaultYes ? '[Y/n]' : '[y/N]';
+  stdout.write(`  ${message} ${styleText('dim', hint)} `);
+
+  return new Promise<boolean>((resolve) => {
+    const wasRaw = stdin.isRaw;
+    stdin.setRawMode(true);
+    stdin.resume();
+
+    function cleanup() {
+      stdin.setRawMode(wasRaw ?? false);
+      stdin.pause();
+      stdin.removeListener('data', onData);
+      stdout.write('\n');
+    }
+
+    function onData(data: Buffer) {
+      const key = data.toString();
+
+      // Ctrl+C
+      if (key === '\x03') {
+        cleanup();
+        process.exit(EXIT_CODES.INTERRUPTED);
+      }
+
+      // Enter — use default
+      if (key === '\r' || key === '\n') {
+        cleanup();
+        resolve(defaultYes);
+        return;
+      }
+
+      // y/Y — yes
+      if (key === 'y' || key === 'Y') {
+        cleanup();
+        resolve(true);
+        return;
+      }
+
+      // n/N/q/Esc — no
+      if (key === 'n' || key === 'N' || key === 'q' || key === '\x1b') {
+        cleanup();
+        resolve(false);
+        return;
+      }
+
+      // Ignore other keys
+    }
+
+    stdin.on('data', onData);
   });
 }

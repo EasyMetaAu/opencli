@@ -5,15 +5,29 @@
  * Everything else is just JS code sent via 'exec'.
  */
 
-export type Action = 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window' | 'sessions' | 'set-file-input' | 'bind-current';
+export type Action =
+  | 'exec'
+  | 'navigate'
+  | 'tabs'
+  | 'cookies'
+  | 'screenshot'
+  | 'close-window'
+  | 'sessions'
+  | 'set-file-input'
+  | 'insert-text'
+  | 'bind'
+  | 'network-capture-start'
+  | 'network-capture-read'
+  | 'cdp'
+  | 'frames';
 
 export interface Command {
   /** Unique request ID */
   id: string;
   /** Action type */
   action: Action;
-  /** Target tab ID (omit for active tab) */
-  tabId?: number;
+  /** Target page identity (targetId). Cross-layer contract with the daemon. */
+  page?: string;
   /** JS code to evaluate in page context (exec action) */
   code?: string;
   /** Logical workspace for automation session reuse */
@@ -36,10 +50,32 @@ export interface Command {
   quality?: number;
   /** Whether to capture full page (not just viewport) */
   fullPage?: boolean;
+  /** Override viewport width in CSS pixels for screenshot (0 / undefined = use current) */
+  width?: number;
+  /** Override viewport height in CSS pixels for screenshot (0 / undefined = use current; ignored when fullPage) */
+  height?: number;
   /** Local file paths for set-file-input action */
   files?: string[];
   /** CSS selector for file input element (set-file-input action) */
   selector?: string;
+  /** Raw text payload for insert-text action */
+  text?: string;
+  /** URL substring filter pattern for network capture actions */
+  pattern?: string;
+  /** CDP method name for 'cdp' action (e.g. 'Accessibility.getFullAXTree') */
+  cdpMethod?: string;
+  /** CDP method params for 'cdp' action */
+  cdpParams?: Record<string, unknown>;
+  /** When true, the owned automation container is created in the foreground (focused) */
+  windowFocused?: boolean;
+  /** Custom idle timeout in seconds for this workspace session. Overrides the default. */
+  idleTimeout?: number;
+  /** Explicitly allow navigation inside a borrowed bound tab. */
+  allowBoundNavigation?: boolean;
+  /** Frame index for cross-frame operations (0-based, from 'frames' action) */
+  frameIndex?: number;
+  /** Browser profile/context selected by the CLI. Used by the daemon for routing. */
+  contextId?: string;
 }
 
 export interface Result {
@@ -51,6 +87,12 @@ export interface Result {
   data?: unknown;
   /** Error message on failure */
   error?: string;
+  /** Stable machine-readable error code on failure */
+  errorCode?: string;
+  /** Optional recovery hint for agent-facing CLI output */
+  errorHint?: string;
+  /** Page identity (targetId) — present only on page-scoped command responses */
+  page?: string;
 }
 
 /** Default daemon port */

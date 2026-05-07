@@ -36,32 +36,6 @@ describe('browser extended public-data commands E2E', () => {
     }
   }, 60_000);
 
-  // ── bloomberg ──
-  it('bloomberg news returns article detail when the article page is accessible', async () => {
-    const feedResult = await runCli(['bloomberg', 'tech', '--limit', '1', '-f', 'json']);
-    if (feedResult.code !== 0) {
-      console.warn('bloomberg news: skipped — could not load Bloomberg tech feed');
-      return;
-    }
-
-    const feedItems = parseJsonOutput(feedResult.stdout);
-    const link = Array.isArray(feedItems) ? feedItems[0]?.link : null;
-    if (!link) {
-      console.warn('bloomberg news: skipped — tech feed returned no link');
-      return;
-    }
-
-    const data = await tryBrowserCommand(['bloomberg', 'news', link, '-f', 'json']);
-    expectDataOrSkip(data, 'bloomberg news');
-    if (data) {
-      expect(data[0]).toHaveProperty('title');
-      expect(data[0]).toHaveProperty('summary');
-      expect(data[0]).toHaveProperty('link');
-      expect(data[0]).toHaveProperty('mediaLinks');
-      expect(data[0]).toHaveProperty('content');
-    }
-  }, 60_000);
-
   // ── weibo ──
   it('weibo hot returns trending topics', async () => {
     const data = await tryBrowserCommand(['weibo', 'hot', '--limit', '5', '-f', 'json']);
@@ -156,6 +130,59 @@ describe('browser extended public-data commands E2E', () => {
       expect(data[0]).toHaveProperty('title');
       expect(data[0]).toHaveProperty('url');
     }
+  }, 60_000);
+
+  // ── academic / policy search ──
+  it('baidu-scholar search returns papers', async () => {
+    const data = await tryBrowserCommand(['baidu-scholar', 'search', '大语言模型', '--limit', '3', '-f', 'json']);
+    expectDataOrSkip(data, 'baidu-scholar search');
+    if (data) {
+      expect(data[0]).toHaveProperty('title');
+      expect(data[0]).toHaveProperty('url');
+    }
+  }, 60_000);
+
+  it('google-scholar search returns papers', async () => {
+    const data = await tryBrowserCommand(['google-scholar', 'search', 'transformer', '--limit', '3', '-f', 'json']);
+    expectDataOrSkip(data, 'google-scholar search');
+    if (data) {
+      expect(data[0]).toHaveProperty('title');
+      expect(data[0]).toHaveProperty('url');
+    }
+  }, 60_000);
+
+  it('wanfang search returns papers', async () => {
+    const data = await tryBrowserCommand(['wanfang', 'search', '知识图谱', '--limit', '3', '-f', 'json']);
+    expectDataOrSkip(data, 'wanfang search');
+    if (data) {
+      expect(data[0]).toHaveProperty('title');
+    }
+  }, 60_000);
+
+  it('gov-law search returns regulations', async () => {
+    const data = await tryBrowserCommand(['gov-law', 'search', '人工智能', '--limit', '3', '-f', 'json']);
+    expectDataOrSkip(data, 'gov-law search');
+    if (data) {
+      expect(data[0]).toHaveProperty('title');
+    }
+  }, 60_000);
+
+  it('gov-law recent returns latest regulations', async () => {
+    const data = await tryBrowserCommand(['gov-law', 'recent', '--limit', '3', '-f', 'json']);
+    expectDataOrSkip(data, 'gov-law recent');
+  }, 60_000);
+
+  it('gov-policy search returns policy documents', async () => {
+    const data = await tryBrowserCommand(['gov-policy', 'search', '科技创新', '--limit', '3', '-f', 'json']);
+    expectDataOrSkip(data, 'gov-policy search');
+    if (data) {
+      expect(data[0]).toHaveProperty('title');
+    }
+  }, 60_000);
+
+  it('gov-policy recent returns latest policy documents', async () => {
+    const data = await tryBrowserCommand(['gov-policy', 'recent', '--limit', '3', '-f', 'json']);
+    expectDataOrSkip(data, 'gov-policy recent');
   }, 60_000);
 
   // ── yahoo-finance ──

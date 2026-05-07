@@ -12,16 +12,16 @@ function createMockPage(overrides: Partial<IPage> = {}): IPage {
   return {
     goto: vi.fn(),
     evaluate: vi.fn().mockResolvedValue(null),
+    fetchJson: vi.fn().mockResolvedValue(null),
     getCookies: vi.fn().mockResolvedValue([]),
     snapshot: vi.fn().mockResolvedValue(''),
     click: vi.fn(),
     typeText: vi.fn(),
+    fillText: vi.fn(),
     pressKey: vi.fn(),
     getFormState: vi.fn().mockResolvedValue({}),
     wait: vi.fn(),
     tabs: vi.fn().mockResolvedValue([]),
-    closeTab: vi.fn(),
-    newTab: vi.fn(),
     selectTab: vi.fn(),
     networkRequests: vi.fn().mockResolvedValue([]),
     consoleMessages: vi.fn().mockResolvedValue(''),
@@ -43,7 +43,7 @@ describe('executePipeline', () => {
   });
 
   it('skips null/invalid steps', async () => {
-    const result = await executePipeline(null, [null, undefined, 42] as any);
+    const result = await executePipeline(null, [null, undefined, 42]);
     expect(result).toBeNull();
   });
 
@@ -176,6 +176,14 @@ describe('executePipeline', () => {
       { click: '@5' },
     ]);
     expect(page.click).toHaveBeenCalledWith('5');
+  });
+
+  it('fill step calls page.fillText with raw rendered text', async () => {
+    const page = createMockPage();
+    await executePipeline(page, [
+      { fill: { ref: '@5', text: 'line1\\n/ / ${{ args.tail }}' } },
+    ], { args: { tail: 'raw' } });
+    expect(page.fillText).toHaveBeenCalledWith('5', 'line1\\n/ / raw');
   });
 
   it('navigate preserves existing data through pipeline', async () => {

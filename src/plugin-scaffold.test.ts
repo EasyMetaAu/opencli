@@ -27,7 +27,7 @@ describe('createPluginScaffold', () => {
     expect(result.dir).toBe(dir);
     expect(result.files).toContain('opencli-plugin.json');
     expect(result.files).toContain('package.json');
-    expect(result.files).toContain('hello.yaml');
+    expect(result.files).toContain('hello.ts');
     expect(result.files).toContain('greet.ts');
     expect(result.files).toContain('README.md');
 
@@ -69,7 +69,7 @@ describe('createPluginScaffold', () => {
     expect(tsSample).toContain(`import { cli, Strategy } from '@jackwener/opencli/registry';`);
     expect(tsSample).toContain(`strategy: Strategy.PUBLIC`);
     expect(tsSample).toContain(`help: 'Name to greet'`);
-    expect(tsSample).toContain(`func: async (_page, kwargs)`);
+    expect(tsSample).toContain(`func: async (kwargs)`);
     expect(tsSample).not.toContain('async run(');
   });
 

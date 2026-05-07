@@ -2,12 +2,14 @@
  * Output formatting: table, JSON, Markdown, CSV, YAML.
  */
 
-import chalk from 'chalk';
+import { styleText } from 'node:util';
 import Table from 'cli-table3';
 import yaml from 'js-yaml';
 
 export interface RenderOptions {
   fmt?: string;
+  /** True when the user explicitly passed -f on the command line */
+  fmtExplicit?: boolean;
   columns?: string[];
   title?: string;
   elapsed?: number;
@@ -26,13 +28,18 @@ function resolveColumns(rows: Record<string, unknown>[], opts: RenderOptions): s
 }
 
 export function render(data: unknown, opts: RenderOptions = {}): void {
-  const fmt = opts.fmt ?? 'table';
+  let fmt = opts.fmt ?? 'table';
+  // Non-TTY auto-downgrade only when format was NOT explicitly passed by user.
+  if (!opts.fmtExplicit) {
+    if (fmt === 'table' && !process.stdout.isTTY) fmt = 'yaml';
+  }
   if (data === null || data === undefined) {
     console.log(data);
     return;
   }
   switch (fmt) {
     case 'json': renderJson(data); break;
+    case 'plain': renderPlain(data, opts); break;
     case 'md': case 'markdown': renderMarkdown(data, opts); break;
     case 'csv': renderCsv(data, opts); break;
     case 'yaml': case 'yml': renderYaml(data); break;
@@ -42,12 +49,12 @@ export function render(data: unknown, opts: RenderOptions = {}): void {
 
 function renderTable(data: unknown, opts: RenderOptions): void {
   const rows = normalizeRows(data);
-  if (!rows.length) { console.log(chalk.dim('(no data)')); return; }
+  if (!rows.length) { console.log(styleText('dim', '(no data)')); return; }
   const columns = resolveColumns(rows, opts);
 
   const header = columns.map(c => capitalize(c));
   const table = new Table({
-    head: header.map(h => chalk.bold(h)),
+    head: header.map(h => styleText('bold', h)),
     style: { head: [], border: [] },
     wordWrap: true,
     wrapOnWordBoundary: true,
@@ -61,19 +68,45 @@ function renderTable(data: unknown, opts: RenderOptions): void {
   }
 
   console.log();
-  if (opts.title) console.log(chalk.dim(`  ${opts.title}`));
+  if (opts.title) console.log(styleText('dim', `  ${opts.title}`));
   console.log(table.toString());
   const footer: string[] = [];
   footer.push(`${rows.length} items`);
-  if (opts.elapsed) footer.push(`${opts.elapsed.toFixed(1)}s`);
+  if (opts.elapsed !== undefined) footer.push(`${opts.elapsed.toFixed(1)}s`);
   if (opts.source) footer.push(opts.source);
   if (opts.footerExtra) footer.push(opts.footerExtra);
-  console.log(chalk.dim(footer.join(' · ')));
+  console.log(styleText('dim', footer.join(' · ')));
 }
 
 function renderJson(data: unknown): void {
   console.log(JSON.stringify(data, null, 2));
 }
+function renderPlain(data: unknown, opts: RenderOptions): void {
+  const rows = normalizeRows(data);
+  if (!rows.length) return;
+
+  // Single-row single-field shortcuts for chat-style commands.
+  if (rows.length === 1) {
+    const row = rows[0];
+    const entries = Object.entries(row);
+    if (entries.length === 1) {
+      const [key, value] = entries[0];
+      if (key === 'response' || key === 'content' || key === 'text' || key === 'value') {
+        console.log(String(value ?? ''));
+        return;
+      }
+    }
+  }
+
+  rows.forEach((row, index) => {
+    const entries = Object.entries(row).filter(([, value]) => value !== undefined && value !== null && String(value) !== '');
+    entries.forEach(([key, value]) => {
+      console.log(`${key}: ${value}`);
+    });
+    if (index < rows.length - 1) console.log('');
+  });
+}
+
 
 function renderMarkdown(data: unknown, opts: RenderOptions): void {
   const rows = normalizeRows(data);

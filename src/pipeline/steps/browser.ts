@@ -34,6 +34,16 @@ export async function stepType(page: IPage | null, params: unknown, data: unknow
   return data;
 }
 
+export async function stepFill(page: IPage | null, params: unknown, data: unknown, args: Record<string, unknown>): Promise<unknown> {
+  if (isRecord(params)) {
+    const ref = String(render(params.ref ?? '', { args, data })).replace(/^@/, '');
+    const text = String(render(params.text ?? '', { args, data }));
+    await page!.fillText(ref, text);
+    if (params.submit) await page!.pressKey('Enter');
+  }
+  return data;
+}
+
 export async function stepWait(page: IPage | null, params: unknown, data: unknown, args: Record<string, unknown>): Promise<unknown> {
   if (typeof params === 'number') await page!.wait(params);
   else if (isRecord(params)) {
@@ -65,7 +75,7 @@ export async function stepSnapshot(page: IPage | null, params: unknown, _data: u
 export async function stepEvaluate(page: IPage | null, params: unknown, data: unknown, args: Record<string, unknown>): Promise<unknown> {
   const js = String(render(params, { args, data }));
   let result: unknown = await page!.evaluate(js);
-  // MCP may return JSON as a string — auto-parse it
+  // Browser may return JSON as a string — auto-parse it
   if (typeof result === 'string') {
     const trimmed = result.trim();
     if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {

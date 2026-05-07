@@ -1,13 +1,16 @@
 import { BrowserBridge, CDPBridge } from './browser/index.js';
 import type { IPage } from './types.js';
 import { TimeoutError } from './errors.js';
+import { isElectronApp } from './electron-apps.js';
+import { log } from './logger.js';
 
 /**
- * Returns the appropriate browser factory based on environment config.
- * Uses CDPBridge when OPENCLI_CDP_ENDPOINT is set, otherwise BrowserBridge.
+ * Returns the appropriate browser factory based on site type.
+ * Uses CDPBridge for registered Electron apps, otherwise BrowserBridge.
  */
-export function getBrowserFactory(): new () => IBrowserFactory {
-  return process.env.OPENCLI_CDP_ENDPOINT ? CDPBridge : BrowserBridge;
+export function getBrowserFactory(site?: string): new () => IBrowserFactory {
+  if (site && isElectronApp(site)) return CDPBridge;
+  return BrowserBridge;
 }
 
 function parseEnvTimeout(envVar: string, fallback: number): number {
@@ -15,7 +18,7 @@ function parseEnvTimeout(envVar: string, fallback: number): number {
   if (raw === undefined) return fallback;
   const parsed = parseInt(raw, 10);
   if (Number.isNaN(parsed) || parsed <= 0) {
-    console.error(`[runtime] Invalid ${envVar}="${raw}", using default ${fallback}s`);
+    log.warn(`[runtime] Invalid ${envVar}="${raw}", using default ${fallback}s`);
     return fallback;
   }
   return parsed;
@@ -61,20 +64,25 @@ export function withTimeoutMs<T>(
 
 /** Interface for browser factory (BrowserBridge or test mocks) */
 export interface IBrowserFactory {
-  connect(opts?: { timeout?: number; workspace?: string }): Promise<IPage>;
+  connect(opts?: { timeout?: number; workspace?: string; cdpEndpoint?: string; contextId?: string }): Promise<IPage>;
   close(): Promise<void>;
 }
 
 export async function browserSession<T>(
   BrowserFactory: new () => IBrowserFactory,
   fn: (page: IPage) => Promise<T>,
-  opts: { workspace?: string } = {},
+  opts: { workspace?: string; cdpEndpoint?: string; contextId?: string } = {},
 ): Promise<T> {
-  const mcp = new BrowserFactory();
+  const browser = new BrowserFactory();
   try {
-    const page = await mcp.connect({ timeout: DEFAULT_BROWSER_CONNECT_TIMEOUT, workspace: opts.workspace });
+    const page = await browser.connect({
+      timeout: DEFAULT_BROWSER_CONNECT_TIMEOUT,
+      workspace: opts.workspace,
+      cdpEndpoint: opts.cdpEndpoint,
+      contextId: opts.contextId,
+    });
     return await fn(page);
   } finally {
-    await mcp.close().catch(() => {});
+    await browser.close().catch(() => {});
   }
 }

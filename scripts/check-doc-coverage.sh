@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check-doc-coverage.sh — Verify every adapter in src/clis/ has a doc page.
+# check-doc-coverage.sh — Verify every adapter in clis/ has a doc page.
 #
 # Exit codes:
 #   0 — all adapters have docs
@@ -19,7 +19,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-SRC_DIR="$ROOT_DIR/src/clis"
+SRC_DIR="$ROOT_DIR/clis"
 DOCS_DIR="$ROOT_DIR/docs/adapters"
 
 missing=()
@@ -30,6 +30,16 @@ for adapter_dir in "$SRC_DIR"/*/; do
   adapter_name="$(basename "$adapter_dir")"
   # Skip internal directories (e.g., _shared)
   [[ "$adapter_name" == _* ]] && continue
+  # Skip directories that only contain utility files (prefixed with _)
+  has_commands=false
+  for f in "$adapter_dir"*; do
+    fname="$(basename "$f")"
+    [[ "$fname" == _* ]] && continue
+    [[ "$fname" == *.test.* ]] && continue
+    has_commands=true
+    break
+  done
+  [[ "$has_commands" == false ]] && continue
   total=$((total + 1))
 
   # Check if doc exists in browser/ or desktop/ subdirectories

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { discoverClis, discoverPlugins, ensureUserCliCompatShims, PLUGINS_DIR } from './discovery.js';
+import { discoverClis, discoverPlugins, ensureUserCliCompatShims, ensureUserAdapters, PLUGINS_DIR } from './discovery.js';
 import { executeCommand } from './execution.js';
 import { getRegistry, cli, Strategy } from './registry.js';
 import { clearAllHooks, onAfterExecute } from './hooks.js';
@@ -17,8 +17,8 @@ describe('discoverClis', () => {
   it('imports only CLI command modules during filesystem discovery', async () => {
     const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-discovery-'));
     const siteDir = path.join(tempRoot, 'temp-site');
-    const helperPath = path.join(siteDir, 'helper.ts');
-    const commandPath = path.join(siteDir, 'hello.ts');
+    const helperPath = path.join(siteDir, 'helper.js');
+    const commandPath = path.join(siteDir, 'hello.js');
 
     try {
       await fs.promises.mkdir(siteDir, { recursive: true });
@@ -30,7 +30,7 @@ export const helper = true;
 import { cli, Strategy } from '${pathToFileURL(path.join(process.cwd(), 'src', 'registry.ts')).href}';
 cli({
   site: 'temp-site',
-  name: 'hello',
+  name: 'hello', access: 'read',
   description: 'hello command',
   strategy: Strategy.PUBLIC,
   browser: false,
@@ -38,13 +38,13 @@ cli({
 });
 `);
 
-      delete (globalThis as any).__opencli_helper_loaded__;
+      delete (globalThis as { __opencli_helper_loaded__?: unknown }).__opencli_helper_loaded__;
       await discoverClis(tempRoot);
 
-      expect((globalThis as any).__opencli_helper_loaded__).toBeUndefined();
+      expect((globalThis as { __opencli_helper_loaded__?: unknown }).__opencli_helper_loaded__).toBeUndefined();
       expect(getRegistry().get('temp-site/hello')).toBeDefined();
     } finally {
-      delete (globalThis as any).__opencli_helper_loaded__;
+      delete (globalThis as { __opencli_helper_loaded__?: unknown }).__opencli_helper_loaded__;
       await fs.promises.rm(tempRoot, { recursive: true, force: true });
     }
   });
@@ -53,7 +53,7 @@ cli({
     const tempBuildRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-manifest-fallback-'));
     const distDir = path.join(tempBuildRoot, 'dist');
     const siteDir = path.join(distDir, 'fallback-site');
-    const commandPath = path.join(siteDir, 'hello.ts');
+    const commandPath = path.join(siteDir, 'hello.js');
     const manifestPath = path.join(tempBuildRoot, 'cli-manifest.json');
 
     try {
@@ -63,7 +63,7 @@ cli({
 import { cli, Strategy } from '${pathToFileURL(path.join(process.cwd(), 'src', 'registry.ts')).href}';
 cli({
   site: 'fallback-site',
-  name: 'hello',
+  name: 'hello', access: 'read',
   description: 'hello command',
   strategy: Strategy.PUBLIC,
   browser: false,
@@ -79,26 +79,27 @@ cli({
     }
   });
 
-  it('loads legacy user TS CLI modules via compatibility shims', async () => {
+  it('loads user CLI modules via package exports symlink', async () => {
     const tempOpencliRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-user-clis-'));
     const userClisDir = path.join(tempOpencliRoot, 'clis');
     const siteDir = path.join(userClisDir, 'legacy-site');
-    const commandPath = path.join(siteDir, 'hello.ts');
+    const commandPath = path.join(siteDir, 'hello.js');
 
     try {
       await ensureUserCliCompatShims(tempOpencliRoot);
       await fs.promises.mkdir(siteDir, { recursive: true });
       await fs.promises.writeFile(commandPath, `
-import { cli, Strategy } from '../../registry';
-import { CommandExecutionError } from '../../errors';
+import { cli, Strategy } from '@jackwener/opencli/registry';
+import { CommandExecutionError } from '@jackwener/opencli/errors';
+import { htmlToMarkdown } from '@jackwener/opencli/utils';
 
 cli({
   site: 'legacy-site',
-  name: 'hello',
+  name: 'hello', access: 'read',
   description: 'hello command',
   strategy: Strategy.PUBLIC,
   browser: false,
-  func: async () => [{ ok: true, errorName: new CommandExecutionError('boom').name }],
+  func: async () => [{ ok: true, errorName: new CommandExecutionError('boom').name, markdown: htmlToMarkdown('<p>hello</p>') }],
 });
 `);
 
@@ -106,9 +107,37 @@ cli({
 
       const cmd = getRegistry().get('legacy-site/hello');
       expect(cmd).toBeDefined();
-      await expect(executeCommand(cmd!, {})).resolves.toEqual([{ ok: true, errorName: 'CommandExecutionError' }]);
+      await expect(executeCommand(cmd!, {})).resolves.toEqual([{ ok: true, errorName: 'CommandExecutionError', markdown: 'hello' }]);
     } finally {
       await fs.promises.rm(tempOpencliRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('ensureUserAdapters', () => {
+  it('creates user clis directory without triggering full copy', async () => {
+    const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-ensure-'));
+    const clisDir = path.join(tempDir, 'clis');
+    try {
+      // Patch USER_CLIS_DIR is not easy, so we test the function behavior indirectly:
+      // ensureUserAdapters should not throw and should be very fast (no fetch script)
+      const start = Date.now();
+      await ensureUserAdapters();
+      const elapsed = Date.now() - start;
+      // Should complete quickly (< 1s) since it only creates a directory
+      expect(elapsed).toBeLessThan(1000);
+    } finally {
+      await fs.promises.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('discoverClis handles empty user directory gracefully', async () => {
+    const emptyDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-empty-'));
+    try {
+      // Should not throw for an empty directory (no adapters to discover)
+      await expect(discoverClis(emptyDir)).resolves.not.toThrow();
+    } finally {
+      await fs.promises.rm(emptyDir, { recursive: true, force: true });
     }
   });
 });
@@ -119,6 +148,7 @@ describe('discoverPlugins', () => {
   const symlinkTargetDir = path.join(os.tmpdir(), '__test-plugin-symlink-target__');
   const symlinkPluginDir = path.join(PLUGINS_DIR, '__test-plugin-symlink__');
   const brokenSymlinkDir = path.join(PLUGINS_DIR, '__test-plugin-broken__');
+  const dirSymlinkType: fs.symlink.Type = process.platform === 'win32' ? 'junction' : 'dir';
 
   afterEach(async () => {
     try { await fs.promises.rm(testPluginDir, { recursive: true }); } catch {}
@@ -127,8 +157,7 @@ describe('discoverPlugins', () => {
     try { await fs.promises.rm(brokenSymlinkDir, { recursive: true, force: true }); } catch {}
   });
 
-  it('discovers YAML plugins from ~/.opencli/plugins/', async () => {
-    // Create a simple YAML adapter in the plugins directory
+  it('ignores YAML files in plugin directories (YAML format removed)', async () => {
     await fs.promises.mkdir(testPluginDir, { recursive: true });
     await fs.promises.writeFile(yamlPath, `
 site: __test-plugin__
@@ -136,21 +165,13 @@ name: greeting
 description: Test plugin greeting
 strategy: public
 browser: false
-
-pipeline:
-  - evaluate: "() => [{ message: 'hello from plugin' }]"
-
-columns: [message]
 `);
 
     await discoverPlugins();
 
     const registry = getRegistry();
     const cmd = registry.get('__test-plugin__/greeting');
-    expect(cmd).toBeDefined();
-    expect(cmd!.site).toBe('__test-plugin__');
-    expect(cmd!.name).toBe('greeting');
-    expect(cmd!.description).toBe('Test plugin greeting');
+    expect(cmd).toBeUndefined();
   });
 
   it('handles non-existent plugins directory gracefully', async () => {
@@ -158,7 +179,7 @@ columns: [message]
     await expect(discoverPlugins()).resolves.not.toThrow();
   });
 
-  it('discovers YAML plugins from symlinked plugin directories', async () => {
+  it('ignores YAML files in symlinked plugin directories (YAML format removed)', async () => {
     await fs.promises.mkdir(PLUGINS_DIR, { recursive: true });
     await fs.promises.mkdir(symlinkTargetDir, { recursive: true });
     await fs.promises.writeFile(path.join(symlinkTargetDir, 'hello.yaml'), `
@@ -167,24 +188,18 @@ name: hello
 description: Test plugin greeting via symlink
 strategy: public
 browser: false
-
-pipeline:
-  - evaluate: "() => [{ message: 'hello from symlink plugin' }]"
-
-columns: [message]
 `);
-    await fs.promises.symlink(symlinkTargetDir, symlinkPluginDir, 'dir');
+    await fs.promises.symlink(symlinkTargetDir, symlinkPluginDir, dirSymlinkType);
 
     await discoverPlugins();
 
     const cmd = getRegistry().get('__test-plugin-symlink__/hello');
-    expect(cmd).toBeDefined();
-    expect(cmd!.description).toBe('Test plugin greeting via symlink');
+    expect(cmd).toBeUndefined();
   });
 
   it('skips broken plugin symlinks without throwing', async () => {
     await fs.promises.mkdir(PLUGINS_DIR, { recursive: true });
-    await fs.promises.symlink(path.join(os.tmpdir(), '__missing-plugin-target__'), brokenSymlinkDir, 'dir');
+    await fs.promises.symlink(path.join(os.tmpdir(), '__missing-plugin-target__'), brokenSymlinkDir, dirSymlinkType);
 
     await expect(discoverPlugins()).resolves.not.toThrow();
     expect(getRegistry().get('__test-plugin-broken__/hello')).toBeUndefined();
@@ -200,14 +215,14 @@ describe('executeCommand', () => {
   it('accepts kebab-case option names after Commander camelCases them', async () => {
     const cmd = cli({
       site: 'test-engine',
-      name: 'kebab-arg-test',
+      name: 'kebab-arg-test', access: 'read',
       description: 'test command with kebab-case arg',
       browser: false,
       strategy: Strategy.PUBLIC,
       args: [
         { name: 'note-id', required: true, help: 'Note ID' },
       ],
-      func: async (_page, kwargs) => [{ noteId: kwargs['note-id'] }],
+      func: async (kwargs) => [{ noteId: kwargs['note-id'] }],
     });
 
     const result = await executeCommand(cmd, { 'note-id': 'abc123' });
@@ -217,11 +232,11 @@ describe('executeCommand', () => {
   it('executes a command with func', async () => {
     const cmd = cli({
       site: 'test-engine',
-      name: 'func-test',
+      name: 'func-test', access: 'read',
       description: 'test command with func',
       browser: false,
       strategy: Strategy.PUBLIC,
-      func: async (_page, kwargs) => {
+      func: async (kwargs) => {
         return [{ title: kwargs.query ?? 'default' }];
       },
     });
@@ -233,7 +248,7 @@ describe('executeCommand', () => {
   it('executes a command with pipeline', async () => {
     const cmd = cli({
       site: 'test-engine',
-      name: 'pipe-test',
+      name: 'pipe-test', access: 'read',
       description: 'test command with pipeline',
       browser: false,
       strategy: Strategy.PUBLIC,
@@ -250,7 +265,7 @@ describe('executeCommand', () => {
   it('throws for command with no func or pipeline', async () => {
     const cmd = cli({
       site: 'test-engine',
-      name: 'empty-test',
+      name: 'empty-test', access: 'read',
       description: 'empty command',
       browser: false,
     });
@@ -262,10 +277,10 @@ describe('executeCommand', () => {
     let receivedDebug = false;
     const cmd = cli({
       site: 'test-engine',
-      name: 'debug-test',
+      name: 'debug-test', access: 'read',
       description: 'debug test',
       browser: false,
-      func: async (_page, _kwargs, debug) => {
+      func: async (_kwargs, debug) => {
         receivedDebug = debug ?? false;
         return [];
       },
@@ -283,7 +298,7 @@ describe('executeCommand', () => {
 
     const cmd = cli({
       site: 'test-engine',
-      name: 'failing-test',
+      name: 'failing-test', access: 'read',
       description: 'failing command',
       browser: false,
       strategy: Strategy.PUBLIC,
@@ -299,22 +314,25 @@ describe('executeCommand', () => {
     expect(typeof seen[0].finishedAt).toBe('number');
   });
 
-  it('fails fast for chatwise commands when OPENCLI_CDP_ENDPOINT is missing', async () => {
+  it('uses launcher for registered Electron apps (chatwise)', async () => {
+    // Mock the launcher to return a fake endpoint (avoids real HTTP/process calls)
+    const launcher = await import('./launcher.js');
+    const spy = vi.spyOn(launcher, 'resolveElectronEndpoint')
+      .mockResolvedValue('http://127.0.0.1:9228');
+
     const cmd = cli({
       site: 'chatwise',
-      name: 'status',
+      name: 'status', access: 'read',
       description: 'chatwise status',
       browser: true,
       strategy: Strategy.PUBLIC,
-      requiredEnv: [
-        {
-          name: 'OPENCLI_CDP_ENDPOINT',
-          help: 'Set OPENCLI_CDP_ENDPOINT before running chatwise commands.',
-        },
-      ],
       func: async () => [{ ok: true }],
     });
 
-    await expect(executeCommand(cmd, {})).rejects.toThrow('requires environment variable OPENCLI_CDP_ENDPOINT');
+    // CDPBridge.connect() will fail (no actual CDP server), but the launcher
+    // should have been called with 'chatwise'.
+    await expect(executeCommand(cmd, {})).rejects.toThrow();
+    expect(spy).toHaveBeenCalledWith('chatwise');
+    spy.mockRestore();
   });
 });

@@ -3,6 +3,7 @@ dist/
 !extension/dist/
 *.tsbuildinfo
 .opencli/
+.worktrees/
 .mcp.json
 *.log
 .DS_Store
@@ -22,3 +23,5 @@ docs/.vitepress/cache
 
 # Database files
 *.db
+autoresearch/results/
+autoresearch-results.tsv

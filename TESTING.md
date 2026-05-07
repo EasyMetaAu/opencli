@@ -30,12 +30,15 @@ tests/
 ├── smoke/
 │   └── api-health.test.ts         # 外部 API、adapter 定义、命令注册健康检查
 src/
-└── **/*.test.ts                   # 单元测试（当前 32 个文件）
+├── **/*.test.ts                   # 单元测试（unit project）
+clis/
+└── **/*.test.{ts,js}              # adapter 测试（adapter project）
 ```
 
 | 层 | 位置 | 当前文件数 | 运行方式 | 用途 |
 |---|---|---:|---|---|
-| 单元测试 | `src/**/*.test.ts` | 32 | `npx vitest run src/` | 内部模块、pipeline、adapter 工具函数 |
+| 单元测试 | `src/**/*.test.ts` | 32 | `npm test` | 内部模块、pipeline、runtime |
+| Adapter 测试 | `clis/**/*.test.{ts,js}` | - | `npm test` / `npm run test:adapter` | adapter 命令与数据归一化 |
 | E2E 测试 | `tests/e2e/*.test.ts` | 5 | `npx vitest run tests/e2e/` | 真实 CLI 命令执行 |
 | 烟雾测试 | `tests/smoke/*.test.ts` | 1 | `npx vitest run tests/smoke/` | 外部 API 与注册完整性 |
 
@@ -43,13 +46,13 @@ src/
 
 ## 当前覆盖范围
 
-### 单元测试（32 个文件）
+### 单元测试与 Adapter 测试
 
 | 领域 | 文件 |
 |---|---|
 | 核心运行时与输出 | `src/browser.test.ts`, `src/browser/dom-snapshot.test.ts`, `src/build-manifest.test.ts`, `src/capabilityRouting.test.ts`, `src/doctor.test.ts`, `src/engine.test.ts`, `src/interceptor.test.ts`, `src/output.test.ts`, `src/plugin.test.ts`, `src/registry.test.ts`, `src/snapshotFormatter.test.ts` |
 | pipeline 与下载 | `src/download/index.test.ts`, `src/pipeline/executor.test.ts`, `src/pipeline/template.test.ts`, `src/pipeline/transform.test.ts` |
-| 站点 / adapter 逻辑 | `src/clis/apple-podcasts/commands.test.ts`, `src/clis/apple-podcasts/utils.test.ts`, `src/clis/bloomberg/utils.test.ts`, `src/clis/chaoxing/utils.test.ts`, `src/clis/coupang/utils.test.ts`, `src/clis/google/utils.test.ts`, `src/clis/grok/ask.test.ts`, `src/clis/twitter/timeline.test.ts`, `src/clis/weread/utils.test.ts`, `src/clis/xiaohongshu/creator-note-detail.test.ts`, `src/clis/xiaohongshu/creator-notes-summary.test.ts`, `src/clis/xiaohongshu/creator-notes.test.ts`, `src/clis/xiaohongshu/search.test.ts`, `src/clis/xiaohongshu/user-helpers.test.ts`, `src/clis/xiaoyuzhou/utils.test.ts`, `src/clis/youtube/transcript-group.test.ts`, `src/clis/zhihu/download.test.ts` |
+| 站点 / adapter 逻辑 | `clis/apple-podcasts/commands.test.ts`, `clis/apple-podcasts/utils.test.ts`, `clis/bloomberg/utils.test.ts`, `clis/chaoxing/utils.test.ts`, `clis/coupang/utils.test.ts`, `clis/google/utils.test.ts`, `clis/grok/ask.test.ts`, `clis/twitter/timeline.test.ts`, `clis/weread/utils.test.ts`, `clis/xiaohongshu/creator-note-detail.test.ts`, `clis/xiaohongshu/creator-notes-summary.test.ts`, `clis/xiaohongshu/creator-notes.test.ts`, `clis/xiaohongshu/search.test.ts`, `clis/xiaohongshu/user-helpers.test.ts`, `clis/xiaoyuzhou/utils.test.ts`, `clis/youtube/transcript-group.test.ts`, `clis/zhihu/download.test.ts` |
 
 这些测试覆盖的重点包括：
 
@@ -94,14 +97,17 @@ find tests/smoke -name '*.test.ts' | sort
 
 ```bash
 npm ci                # 安装依赖
-npm run build         # 编译（E2E / smoke 测试需要 dist/main.js）
+npm run build         # 编译（E2E / smoke 测试需要 dist/src/main.js）
 ```
 
 ### 运行命令
 
 ```bash
-# 全部单元测试
-npx vitest run src/
+# 默认本地测试口径（unit + extension + adapter）
+npm test
+
+# 只跑 adapter project
+npm run test:adapter
 
 # 全部 E2E 测试（会真实调用外部 API / 浏览器）
 npx vitest run tests/e2e/
@@ -110,7 +116,7 @@ npx vitest run tests/e2e/
 npx vitest run tests/smoke/
 
 # 单个测试文件
-npx vitest run src/clis/apple-podcasts/commands.test.ts
+npm test -- --run clis/apple-podcasts/commands.test.ts
 npx vitest run tests/e2e/management.test.ts
 
 # 全部测试
@@ -123,7 +129,7 @@ npx vitest src/
 ### 浏览器命令本地测试须知
 
 - opencli 通过 Browser Bridge 扩展连接已运行的 Chrome 浏览器
-- E2E 测试通过 `tests/e2e/helpers.ts` 里的 `runCli()` 调用已构建的 `dist/main.js`
+- E2E 测试通过 `tests/e2e/helpers.ts` 里的 `runCli()` 调用已构建的 `dist/src/main.js`
 - `browser-public.test.ts` 使用 `tryBrowserCommand()`，站点反爬或地域限制导致空数据时会 warn + pass
 - `browser-auth.test.ts` 验证 **graceful failure**，重点是不 crash、不 hang、错误信息可控
 - 如需测试完整登录态，保持 Chrome 登录态并安装 Browser Bridge 扩展，再手动运行对应测试
@@ -132,10 +138,9 @@ npx vitest src/
 
 ## 如何添加新测试
 
-### 新增 YAML Adapter（如 `src/clis/producthunt/trending.yaml`）
+### 新增 Adapter（如 `clis/producthunt/trending.ts`）
 
-1. `opencli validate` 的 E2E / smoke 测试会覆盖 adapter 结构校验
-2. 根据 adapter 类型，在对应测试文件补一个 `it()` block
+1. 根据 adapter 类型，在对应测试文件补一个 `it()` block
 
 ```typescript
 // 如果 browser: false（公开 API）→ tests/e2e/public-commands.test.ts
@@ -193,7 +198,8 @@ it('producthunt me fails gracefully without login', async () => {
 | Job | 触发条件 | 内容 |
 |---|---|---|
 | `build` | push/PR 到 `main`,`dev` | `tsc --noEmit` + `npm run build` |
-| `unit-test` | push/PR 到 `main`,`dev` | Node `20` 与 `22` 双版本运行 `src/` 单元测试，按 `2` shard 并行 |
+| `unit-test` | push/PR 到 `main`,`dev` | Node `22` 运行 `unit + extension`，按 `2` shard 并行 |
+| `adapter-test` | push/PR 到 `main`,`dev` | Node `22` 单独运行 `adapter` project |
 | `smoke-test` | `schedule` 或 `workflow_dispatch` | 安装真实 Chrome，`xvfb-run` 执行 `tests/smoke/` |
 
 ### `e2e-headed.yml`
@@ -202,19 +208,18 @@ it('producthunt me fails gracefully without login', async () => {
 |---|---|---|
 | `e2e-headed` | push/PR 到 `main`,`dev`，或手动触发 | 安装真实 Chrome，`xvfb-run` 执行 `tests/e2e/` |
 
-E2E 与 smoke 都使用 `./.github/actions/setup-chrome` 准备真实 Chrome，并通过 `OPENCLI_BROWSER_EXECUTABLE_PATH` 注入浏览器路径。
+E2E 与 smoke 都使用 `./.github/actions/setup-chrome` 准备真实 Chrome。
 
 ### Sharding
 
-单元测试使用 vitest 内置 shard，并在 Node `20` / `22` 两个版本上运行：
+CI 里的 `unit-test` job 使用 vitest shard，只切 `unit + extension`，避免和独立的 `adapter-test` job 重复：
 
 ```yaml
 strategy:
   matrix:
-    node-version: ['20', '22']
     shard: [1, 2]
 steps:
-  - run: npx vitest run src/ --reporter=verbose --shard=${{ matrix.shard }}/2
+  - run: npx vitest run --project unit --project extension --reporter=verbose --shard=${{ matrix.shard }}/2
 ```
 
 ---
@@ -228,12 +233,7 @@ opencli 通过 Browser Bridge 扩展连接浏览器：
 | 扩展已安装 / 已连接 | Extension 模式 | 本地用户，连接已登录的 Chrome |
 | 无扩展 token | CLI 自行拉起浏览器 | CI、无登录态或纯自动化场景 |
 
-CI 中使用 `OPENCLI_BROWSER_EXECUTABLE_PATH` 指定真实 Chrome 路径：
-
-```yaml
-env:
-  OPENCLI_BROWSER_EXECUTABLE_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
-```
+CI 通过 `./.github/actions/setup-chrome` 准备真实 Chrome，再直接执行测试。
 
 ---
 

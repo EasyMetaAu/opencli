@@ -1,5 +1,5 @@
 /**
- * Tests for snapshotFormatter.ts: Playwright MCP snapshot tree filtering.
+ * Tests for snapshotFormatter.ts: snapshot tree filtering.
  *
  * Uses sanitized excerpts from real websites (GitHub, Bilibili, Twitter)
  * to validate noise filtering, annotation stripping, and output quality.
@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { formatSnapshot } from './snapshotFormatter.js';
 
 // ---------------------------------------------------------------------------
-// Fixtures: sanitized excerpts from real Playwright MCP snapshots
+// Fixtures: sanitized excerpts from real aria snapshots
 // ---------------------------------------------------------------------------
 
 /** GitHub dashboard navigation bar (generic-heavy, refs, /url: lines) */
@@ -174,8 +174,8 @@ describe('formatSnapshot', () => {
   describe('basic behavior', () => {
     it('returns empty string for empty/null input', () => {
       expect(formatSnapshot('')).toBe('');
-      expect(formatSnapshot(null as any)).toBe('');
-      expect(formatSnapshot(undefined as any)).toBe('');
+      expect(formatSnapshot(null as unknown as string)).toBe('');
+      expect(formatSnapshot(undefined as unknown as string)).toBe('');
     });
 
     it('strips [ref=...] and [cursor=...] annotations', () => {

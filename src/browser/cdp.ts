@@ -11,24 +11,14 @@
 import { WebSocket, type RawData } from 'ws';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import type { BrowserCookie, IPage, ScreenshotOptions, SnapshotOptions, WaitOptions } from '../types.js';
+import type { BrowserCookie, IPage, ScreenshotOptions } from '../types.js';
 import type { IBrowserFactory } from '../runtime.js';
 import { wrapForEval } from './utils.js';
-import { generateSnapshotJs, scrollToRefJs, getFormStateJs } from './dom-snapshot.js';
 import { generateStealthJs } from './stealth.js';
-import {
-  clickJs,
-  typeTextJs,
-  pressKeyJs,
-  waitForTextJs,
-  scrollJs,
-  autoScrollJs,
-  networkRequestsJs,
-  waitForDomStableJs,
-  waitForCaptureJs,
-  waitForSelectorJs,
-} from './dom-helpers.js';
+import { waitForDomStableJs } from './dom-helpers.js';
 import { isRecord, saveBase64ToFile } from '../utils.js';
+import { getAllElectronApps } from '../electron-apps.js';
+import { BasePage } from './base-page.js';
 
 export interface CDPTarget {
   type?: string;
@@ -50,17 +40,24 @@ interface RuntimeEvaluateResult {
 
 const CDP_SEND_TIMEOUT = 30_000;
 
+// Memory guard for in-process capture. The 4k cap we used to apply everywhere
+// silently truncated JSON so `JSON.parse` failed or gave partial objects — the
+// primary agent-facing bug. Now we keep the full body up to a large cap and
+// surface `responseBodyFullSize` + `responseBodyTruncated` so downstream layers
+// can tell the agent what happened instead of lying about the payload.
+export const CDP_RESPONSE_BODY_CAPTURE_LIMIT = 8 * 1024 * 1024;
+
 export class CDPBridge implements IBrowserFactory {
   private _ws: WebSocket | null = null;
   private _idCounter = 0;
   private _pending = new Map<number, { resolve: (val: unknown) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private _eventListeners = new Map<string, Set<(params: unknown) => void>>();
 
-  async connect(opts?: { timeout?: number; workspace?: string }): Promise<IPage> {
+  async connect(opts?: { timeout?: number; workspace?: string; cdpEndpoint?: string; contextId?: string }): Promise<IPage> {
     if (this._ws) throw new Error('CDPBridge is already connected. Call close() before reconnecting.');
 
-    const endpoint = process.env.OPENCLI_CDP_ENDPOINT;
-    if (!endpoint) throw new Error('OPENCLI_CDP_ENDPOINT is not set');
+    const endpoint = opts?.cdpEndpoint ?? process.env.OPENCLI_CDP_ENDPOINT;
+    if (!endpoint) throw new Error('CDP endpoint not provided (pass cdpEndpoint or set OPENCLI_CDP_ENDPOINT)');
 
     let wsUrl = endpoint;
     if (endpoint.startsWith('http')) {
@@ -75,7 +72,11 @@ export class CDPBridge implements IBrowserFactory {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(wsUrl);
       const timeoutMs = (opts?.timeout ?? 10) * 1000;
-      const timeout = setTimeout(() => reject(new Error('CDP connect timeout')), timeoutMs);
+      const timeout = setTimeout(() => {
+        this._ws = null;
+        ws.close();
+        reject(new Error('CDP connect timeout'));
+      }, timeoutMs);
 
       ws.on('open', async () => {
         clearTimeout(timeout);
@@ -83,7 +84,11 @@ export class CDPBridge implements IBrowserFactory {
         try {
           await this.send('Page.enable');
           await this.send('Page.addScriptToEvaluateOnNewDocument', { source: generateStealthJs() });
-        } catch {}
+        } catch (err) {
+          ws.close();
+          reject(err instanceof Error ? err : new Error(String(err)));
+          return;
+        }
         resolve(new CDPPage(this));
       });
 
@@ -111,7 +116,12 @@ export class CDPBridge implements IBrowserFactory {
               for (const fn of listeners) fn(msg.params);
             }
           }
-        } catch {}
+        } catch (err) {
+          if (process.env.OPENCLI_VERBOSE) {
+            // eslint-disable-next-line no-console
+            console.error('[cdp] Failed to parse WebSocket message:', err instanceof Error ? err.message : err);
+          }
+        }
       });
     });
   }
@@ -173,12 +183,30 @@ export class CDPBridge implements IBrowserFactory {
   }
 }
 
-class CDPPage implements IPage {
+class CDPPage extends BasePage {
   private _pageEnabled = false;
-  private _lastUrl: string | null = null;
-  constructor(private bridge: CDPBridge) {}
 
-  async goto(url: string, options?: { waitUntil?: 'load' | 'none'; settleMs?: number }): Promise<void> {
+  // Network capture state (mirrors extension/src/cdp.ts NetworkCaptureEntry shape)
+  private _networkCapturing = false;
+  private _networkCapturePattern = '';
+  private _networkEntries: Array<{
+    url: string; method: string; responseStatus?: number;
+    responseContentType?: string;
+    responsePreview?: string;
+    responseBodyFullSize?: number;
+    responseBodyTruncated?: boolean;
+    timestamp: number;
+  }> = [];
+  private _pendingRequests = new Map<string, number>(); // requestId → index in _networkEntries
+  private _pendingBodyFetches: Set<Promise<void>> = new Set(); // track in-flight getResponseBody calls
+  private _consoleMessages: Array<{ type: string; text: string; timestamp: number }> = [];
+  private _consoleCapturing = false;
+
+  constructor(private bridge: CDPBridge) {
+    super();
+  }
+
+  async goto(url: string, options?: { waitUntil?: 'load' | 'none'; settleMs?: number; allowBoundNavigation?: boolean }): Promise<void> {
     if (!this._pageEnabled) {
       await this.bridge.send('Page.enable');
       this._pageEnabled = true;
@@ -215,147 +243,225 @@ class CDPPage implements IPage {
       : cookies;
   }
 
-  async snapshot(opts: SnapshotOptions = {}): Promise<unknown> {
-    const snapshotJs = generateSnapshotJs({
-      viewportExpand: opts.viewportExpand ?? 800,
-      maxDepth: Math.max(1, Math.min(Number(opts.maxDepth) || 50, 200)),
-      interactiveOnly: opts.interactive ?? false,
-      maxTextLength: opts.maxTextLength ?? 120,
-      includeScrollInfo: true,
-      bboxDedup: true,
-    });
-    return this.evaluate(snapshotJs);
-  }
+  async screenshot(options: ScreenshotOptions = {}): Promise<string> {
+    const fullPage = options.fullPage === true;
+    const overrideWidth = options.width && options.width > 0 ? Math.ceil(options.width) : undefined;
+    // height is ignored under fullPage so the captureBeyondViewport path stays unchanged for users who pass --height alongside --full-page.
+    const overrideHeight = !fullPage && options.height && options.height > 0 ? Math.ceil(options.height) : undefined;
+    const needsOverride = overrideWidth !== undefined || overrideHeight !== undefined;
 
-  async click(ref: string): Promise<void> {
-    await this.evaluate(clickJs(ref));
-  }
-
-  async typeText(ref: string, text: string): Promise<void> {
-    await this.evaluate(typeTextJs(ref, text));
-  }
-
-  async pressKey(key: string): Promise<void> {
-    await this.evaluate(pressKeyJs(key));
-  }
-
-  async scrollTo(ref: string): Promise<unknown> {
-    return this.evaluate(scrollToRefJs(ref));
-  }
-
-  async getFormState(): Promise<Record<string, unknown>> {
-    return (await this.evaluate(getFormStateJs())) as Record<string, unknown>;
-  }
-
-  async wait(options: number | WaitOptions): Promise<void> {
-    if (typeof options === 'number') {
-      if (options >= 1) {
-        try {
-          const maxMs = options * 1000;
-          await this.evaluate(waitForDomStableJs(maxMs, Math.min(500, maxMs)));
-          return;
-        } catch {
-          // Fallback: fixed sleep
+    if (needsOverride) {
+      if (overrideWidth !== undefined && fullPage) {
+        await this.bridge.send('Emulation.setDeviceMetricsOverride', {
+          mobile: false,
+          width: overrideWidth,
+          height: 0,
+          deviceScaleFactor: 1,
+        });
+      }
+      let finalWidth = overrideWidth ?? 0;
+      let finalHeight = overrideHeight ?? 0;
+      if (fullPage) {
+        const metrics = await this.bridge.send('Page.getLayoutMetrics');
+        const m = isRecord(metrics) ? metrics : {};
+        const css = isRecord(m.cssContentSize) ? m.cssContentSize : undefined;
+        const fb = isRecord(m.contentSize) ? m.contentSize : undefined;
+        const size = css ?? fb;
+        if (size && typeof size.width === 'number' && typeof size.height === 'number') {
+          if (finalWidth === 0) finalWidth = Math.ceil(size.width);
+          finalHeight = Math.ceil(size.height);
         }
       }
-      await new Promise((resolve) => setTimeout(resolve, options * 1000));
-      return;
+      await this.bridge.send('Emulation.setDeviceMetricsOverride', {
+        mobile: false,
+        width: finalWidth,
+        height: finalHeight,
+        deviceScaleFactor: 1,
+      });
     }
-    if (typeof options.time === 'number') {
-      const waitTime = options.time;
-      await new Promise((resolve) => setTimeout(resolve, waitTime * 1000));
-      return;
-    }
-    if (options.selector) {
-      const timeout = (options.timeout ?? 10) * 1000;
-      await this.evaluate(waitForSelectorJs(options.selector, timeout));
-      return;
-    }
-    if (options.text) {
-      const timeout = (options.timeout ?? 30) * 1000;
-      await this.evaluate(waitForTextJs(options.text, timeout));
+
+    try {
+      const result = await this.bridge.send('Page.captureScreenshot', {
+        format: options.format ?? 'png',
+        quality: options.format === 'jpeg' ? (options.quality ?? 80) : undefined,
+        captureBeyondViewport: !needsOverride && fullPage,
+      });
+      const base64 = isRecord(result) && typeof result.data === 'string' ? result.data : '';
+      if (options.path) {
+        await saveBase64ToFile(base64, options.path);
+      }
+      return base64;
+    } finally {
+      if (needsOverride) {
+        await this.bridge.send('Emulation.clearDeviceMetricsOverride').catch(() => {});
+      }
     }
   }
 
-  async scroll(direction: string = 'down', amount: number = 500): Promise<void> {
-    await this.evaluate(scrollJs(direction, amount));
-  }
+  async startNetworkCapture(pattern: string = ''): Promise<boolean> {
+    // Always update the filter pattern
+    this._networkCapturePattern = pattern;
 
-  async autoScroll(options?: { times?: number; delayMs?: number }): Promise<void> {
-    const times = options?.times ?? 3;
-    const delayMs = options?.delayMs ?? 2000;
-    await this.evaluate(autoScrollJs(times, delayMs));
-  }
+    // Reset state only on first start; avoid wiping entries if already capturing
+    if (!this._networkCapturing) {
+      this._networkEntries = [];
+      this._pendingRequests.clear();
+      this._pendingBodyFetches.clear();
+      await this.bridge.send('Network.enable');
 
-  async screenshot(options: ScreenshotOptions = {}): Promise<string> {
-    const result = await this.bridge.send('Page.captureScreenshot', {
-      format: options.format ?? 'png',
-      quality: options.format === 'jpeg' ? (options.quality ?? 80) : undefined,
-      captureBeyondViewport: options.fullPage ?? false,
-    });
-    const base64 = isRecord(result) && typeof result.data === 'string' ? result.data : '';
-    if (options.path) {
-      await saveBase64ToFile(base64, options.path);
+      // Step 1: Record request method/url on requestWillBeSent
+      this.bridge.on('Network.requestWillBeSent', (params: unknown) => {
+        const p = params as { requestId: string; request: { method: string; url: string }; timestamp: number };
+        if (!this._networkCapturePattern || p.request.url.includes(this._networkCapturePattern)) {
+          const idx = this._networkEntries.push({
+            url: p.request.url,
+            method: p.request.method,
+            timestamp: Date.now(),
+          }) - 1;
+          this._pendingRequests.set(p.requestId, idx);
+        }
+      });
+
+      // Step 2: Fill in response metadata on responseReceived
+      this.bridge.on('Network.responseReceived', (params: unknown) => {
+        const p = params as { requestId: string; response: { status: number; mimeType?: string } };
+        const idx = this._pendingRequests.get(p.requestId);
+        if (idx !== undefined) {
+          this._networkEntries[idx].responseStatus = p.response.status;
+          this._networkEntries[idx].responseContentType = p.response.mimeType || '';
+        }
+      });
+
+      // Step 3: Fetch body on loadingFinished (body is only reliably available after this)
+      this.bridge.on('Network.loadingFinished', (params: unknown) => {
+        const p = params as { requestId: string };
+        const idx = this._pendingRequests.get(p.requestId);
+        if (idx !== undefined) {
+          const bodyFetch = this.bridge.send('Network.getResponseBody', { requestId: p.requestId }).then((result: unknown) => {
+            const r = result as { body?: string; base64Encoded?: boolean } | undefined;
+            if (typeof r?.body === 'string') {
+              const fullSize = r.body.length;
+              const truncated = fullSize > CDP_RESPONSE_BODY_CAPTURE_LIMIT;
+              const body = truncated ? r.body.slice(0, CDP_RESPONSE_BODY_CAPTURE_LIMIT) : r.body;
+              this._networkEntries[idx].responsePreview = r.base64Encoded ? `base64:${body}` : body;
+              this._networkEntries[idx].responseBodyFullSize = fullSize;
+              this._networkEntries[idx].responseBodyTruncated = truncated;
+            }
+          }).catch((err) => {
+            // Body unavailable for some requests (e.g. uploads) — non-fatal
+            if (process.env.OPENCLI_VERBOSE) {
+              // eslint-disable-next-line no-console
+              console.error(`[cdp] getResponseBody failed for ${p.requestId}:`, err instanceof Error ? err.message : err);
+            }
+          }).finally(() => {
+            this._pendingBodyFetches.delete(bodyFetch);
+          });
+          this._pendingBodyFetches.add(bodyFetch);
+          this._pendingRequests.delete(p.requestId);
+        }
+      });
+
+      this._networkCapturing = true;
     }
-    return base64;
+    return true;
   }
 
-  async networkRequests(includeStatic: boolean = false): Promise<unknown[]> {
-    const result = await this.evaluate(networkRequestsJs(includeStatic));
-    return Array.isArray(result) ? result : [];
+  async readNetworkCapture(): Promise<unknown[]> {
+    // Await all in-flight body fetches so entries have responsePreview populated
+    if (this._pendingBodyFetches.size > 0) {
+      await Promise.all([...this._pendingBodyFetches]);
+    }
+    const entries = [...this._networkEntries];
+    this._networkEntries = [];
+    return entries;
+  }
+
+  async consoleMessages(level: string = 'all'): Promise<Array<{ type: string; text: string; timestamp: number }>> {
+    if (!this._consoleCapturing) {
+      await this.bridge.send('Runtime.enable');
+      this.bridge.on('Runtime.consoleAPICalled', (params: unknown) => {
+        const p = params as { type: string; args: Array<{ value?: unknown; description?: string }>; timestamp: number };
+        const text = (p.args || []).map(a => a.value !== undefined ? String(a.value) : (a.description || '')).join(' ');
+        this._consoleMessages.push({ type: p.type, text, timestamp: Date.now() });
+        if (this._consoleMessages.length > 500) this._consoleMessages.shift();
+      });
+      // Capture uncaught exceptions as error-level messages
+      this.bridge.on('Runtime.exceptionThrown', (params: unknown) => {
+        const p = params as { timestamp: number; exceptionDetails?: { exception?: { description?: string }; text?: string } };
+        const desc = p.exceptionDetails?.exception?.description || p.exceptionDetails?.text || 'Unknown exception';
+        this._consoleMessages.push({ type: 'error', text: desc, timestamp: Date.now() });
+        if (this._consoleMessages.length > 500) this._consoleMessages.shift();
+      });
+      this._consoleCapturing = true;
+    }
+    if (level === 'all') return [...this._consoleMessages];
+    // 'error' level includes both console.error() and uncaught exceptions
+    if (level === 'error') return this._consoleMessages.filter(m => m.type === 'error' || m.type === 'warning');
+    return this._consoleMessages.filter(m => m.type === level);
   }
 
   async tabs(): Promise<unknown[]> {
     return [];
   }
 
-  async closeTab(_index?: number): Promise<void> {
+  async selectTab(_target: number | string): Promise<void> {
     // Not supported in direct CDP mode
   }
 
-  async newTab(): Promise<void> {
-    await this.bridge.send('Target.createTarget', { url: 'about:blank' });
+  async cdp(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    return this.bridge.send(method, params);
   }
 
-  async selectTab(_index: number): Promise<void> {
-    // Not supported in direct CDP mode
+  async handleJavaScriptDialog(accept: boolean, promptText?: string): Promise<void> {
+    await this.cdp('Page.handleJavaScriptDialog', {
+      accept,
+      ...(promptText !== undefined && { promptText }),
+    });
   }
 
-  async consoleMessages(_level?: string): Promise<unknown[]> {
-    return [];
+  async nativeClick(x: number, y: number): Promise<void> {
+    await this.cdp('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x,
+      y,
+      button: 'left',
+      clickCount: 1,
+    });
+    await this.cdp('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x,
+      y,
+      button: 'left',
+      clickCount: 1,
+    });
   }
 
-  async getCurrentUrl(): Promise<string | null> {
-    if (this._lastUrl) return this._lastUrl;
-    try {
-      const current = await this.evaluate('window.location.href');
-      if (typeof current === 'string' && current) {
-        this._lastUrl = current;
-        return current;
-      }
-    } catch {
-      // Best-effort: direct CDP sessions may not have a ready page yet.
+  async nativeType(text: string): Promise<void> {
+    await this.cdp('Input.insertText', { text });
+  }
+
+  async insertText(text: string): Promise<void> {
+    await this.nativeType(text);
+  }
+
+  async nativeKeyPress(key: string, modifiers: string[] = []): Promise<void> {
+    let modifierFlags = 0;
+    for (const mod of modifiers) {
+      if (mod === 'Alt') modifierFlags |= 1;
+      if (mod === 'Ctrl' || mod === 'Control') modifierFlags |= 2;
+      if (mod === 'Meta') modifierFlags |= 4;
+      if (mod === 'Shift') modifierFlags |= 8;
     }
-    return null;
-  }
-
-  async installInterceptor(pattern: string): Promise<void> {
-    const { generateInterceptorJs } = await import('../interceptor.js');
-    await this.evaluate(generateInterceptorJs(JSON.stringify(pattern), {
-      arrayName: '__opencli_xhr',
-      patchGuard: '__opencli_interceptor_patched',
-    }));
-  }
-
-  async getInterceptedRequests(): Promise<unknown[]> {
-    const { generateReadInterceptedJs } = await import('../interceptor.js');
-    const result = await this.evaluate(generateReadInterceptedJs('__opencli_xhr'));
-    return Array.isArray(result) ? result : [];
-  }
-
-  async waitForCapture(timeout: number = 10): Promise<void> {
-    const maxMs = timeout * 1000;
-    await this.evaluate(waitForCaptureJs(maxMs));
+    await this.cdp('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key,
+      modifiers: modifierFlags,
+    });
+    await this.cdp('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key,
+      modifiers: modifierFlags,
+    });
   }
 }
 
@@ -397,6 +503,7 @@ function scoreCDPTarget(target: CDPTarget, preferredPattern?: RegExp): number {
 
   if (!haystack.trim() && !type) return Number.NEGATIVE_INFINITY;
   if (haystack.includes('devtools')) return Number.NEGATIVE_INFINITY;
+  if (type === 'background_page' || type === 'service_worker') return Number.NEGATIVE_INFINITY;
 
   let score = 0;
 
@@ -414,19 +521,15 @@ function scoreCDPTarget(target: CDPTarget, preferredPattern?: RegExp): number {
   if (url === '' || url === 'about:blank') score -= 40;
 
   if (title && title !== 'devtools') score += 25;
-  if (title.includes('antigravity')) score += 120;
-  if (title.includes('codex')) score += 120;
-  if (title.includes('cursor')) score += 120;
-  if (title.includes('chatwise')) score += 120;
-  if (title.includes('notion')) score += 120;
-  if (title.includes('discord')) score += 120;
 
-  if (url.includes('antigravity')) score += 100;
-  if (url.includes('codex')) score += 100;
-  if (url.includes('cursor')) score += 100;
-  if (url.includes('chatwise')) score += 100;
-  if (url.includes('notion')) score += 100;
-  if (url.includes('discord')) score += 100;
+  // Boost score for known Electron app names from the registry (builtin + user-defined)
+  const appNames = Object.values(getAllElectronApps()).map(a => (a.displayName ?? a.processName).toLowerCase());
+  for (const name of appNames) {
+    if (title.includes(name)) { score += 120; break; }
+  }
+  for (const name of appNames) {
+    if (url.includes(name)) { score += 100; break; }
+  }
 
   return score;
 }

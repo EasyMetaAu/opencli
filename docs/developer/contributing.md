@@ -17,8 +17,7 @@ npm run build
 
 # 4. Run a few checks
 npx tsc --noEmit
-npm test
-npm run test:adapter
+npm run build
 
 # 5. Link globally (optional, for testing `opencli` command)
 npm link
@@ -26,7 +25,7 @@ npm link
 
 ## Adding a New Site Adapter
 
-This is the most common type of contribution. Start with YAML when possible, and use TypeScript only when you need browser-side logic or multi-step flows.
+This is the most common type of contribution. All adapters use TypeScript with the `cli()` API.
 
 Before you start:
 
@@ -34,59 +33,24 @@ Before you start:
 - Normalize expected adapter failures to `CliError` subclasses instead of raw `Error` whenever possible. Prefer `AuthRequiredError`, `EmptyResultError`, `CommandExecutionError`, `TimeoutError`, and `ArgumentError` so the top-level CLI can render better messages and hints.
 - If you add a new adapter or make a command newly discoverable, update the matching doc page and the user-facing indexes that expose it.
 
-### YAML Adapter (Recommended for data-fetching commands)
+### TypeScript Adapter
 
-Create a file like `src/clis/<site>/<command>.yaml`:
-
-::: v-pre
-```yaml
-site: mysite
-name: trending
-description: Trending posts on MySite
-domain: www.mysite.com
-strategy: public      # public | cookie | header
-browser: false        # true if browser session is needed
-
-args:
-  limit:
-    type: int
-    default: 20
-    description: Number of items
-
-pipeline:
-  - fetch:
-      url: https://api.mysite.com/trending
-
-  - map:
-      rank: ${{ index + 1 }}
-      title: ${{ item.title }}
-      score: ${{ item.score }}
-      url: ${{ item.url }}
-
-  - limit: ${{ args.limit }}
-
-columns: [rank, title, score, url]
-```
-:::
-
-See [`hackernews/top.yaml`](https://github.com/jackwener/opencli/blob/main/src/clis/hackernews/top.yaml) for a real example.
-
-### TypeScript Adapter (For complex browser interactions)
-
-Create a file like `src/clis/<site>/<command>.ts`:
+Create a file like `clis/<site>/<command>.ts`:
 
 ```typescript
-import { cli, Strategy } from '../../registry.js';
-import { CommandExecutionError, EmptyResultError } from '../../errors.js';
+import { cli, Strategy } from '@jackwener/opencli/registry';
+import { CommandExecutionError, EmptyResultError } from '@jackwener/opencli/errors';
 
 cli({
   site: 'mysite',
   name: 'search',
   description: 'Search MySite',
+  access: 'read', // 'read' | 'write'
+  example: 'opencli mysite search <query> -f yaml',
   domain: 'www.mysite.com',
   strategy: Strategy.COOKIE,
   args: [
-    { name: 'query', required: true, help: 'Search query' },
+    { name: 'query', positional: true, required: true, help: 'Search query' },
     { name: 'limit', type: 'int', default: 10, help: 'Max results' },
   ],
   columns: ['title', 'url', 'date'],
@@ -108,7 +72,6 @@ cli({
 ### Validate Your Adapter
 
 ```bash
-opencli validate               # Validate YAML syntax and schema
 opencli <site> <command> --limit 3 -f json   # Test your command
 opencli <site> <command> -v    # Verbose mode for debugging
 ```
@@ -137,12 +100,12 @@ chore: bump vitest to v4
 
 1. Create a feature branch: `git checkout -b feat/mysite-trending`
 2. Make your changes and add tests when relevant
-3. Run the checks:
+3. Run the smallest check set that matches your change:
    ```bash
    npx tsc --noEmit           # Type check
-   npm test                   # Core unit tests
-   npm run test:adapter       # Focused adapter tests (if adapter logic changed)
-   opencli validate           # YAML validation (if applicable)
+   npm run build              # Ensure dist stays healthy
+   npx vitest run src/<target>.test.ts
+   npm test                   # Broader local gate when shared runtime changes justify it
    ```
 4. Commit using conventional commit format
 5. Push and open a PR

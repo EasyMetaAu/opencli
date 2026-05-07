@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 async function loadModule() {
-  return import('./clis/weixin/download.js');
+  // @ts-expect-error JS adapter — no type declarations
+  return import('../clis/weixin/download.js');
 }
 
 describe('weixin publish time extraction', () => {

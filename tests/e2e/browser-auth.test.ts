@@ -84,6 +84,10 @@ describe('login-required commands — graceful failure', () => {
     await expectGracefulAuthFailure(['linux-do', 'topic', '1', '-f', 'json']);
   }, 60_000);
 
+  it('linux-do topic-content fails gracefully without login', async () => {
+    await expectGracefulAuthFailure(['linux-do', 'topic-content', '1', '-f', 'json']);
+  }, 60_000);
+
   it('linux-do search fails gracefully without login', async () => {
     await expectGracefulAuthFailure(['linux-do', 'search', 'test', '--limit', '3', '-f', 'json']);
   }, 60_000);
@@ -103,6 +107,15 @@ describe('login-required commands — graceful failure', () => {
 
   it('xiaohongshu notifications fails gracefully without login', async () => {
     await expectGracefulAuthFailure(['xiaohongshu', 'notifications', '--limit', '3', '-f', 'json']);
+  }, 60_000);
+
+  // ── yuanbao (requires login) ──
+  it('yuanbao new fails gracefully without login', async () => {
+    await expectGracefulAuthFailure(['yuanbao', 'new', '-f', 'json']);
+  }, 60_000);
+
+  it('yuanbao ask fails gracefully without login', async () => {
+    await expectGracefulAuthFailure(['yuanbao', 'ask', '你好', '-f', 'json']);
   }, 60_000);
 
   // ── pixiv (requires login) ──
@@ -137,5 +150,34 @@ describe('login-required commands — graceful failure', () => {
 
   it('yollomi video fails gracefully without login', async () => {
     await expectGracefulAuthFailure(['yollomi', 'video', 'a sunset over the ocean', '--no-download', '-f', 'json']);
+  }, 60_000);
+
+  // ── quark (requires cookie session) ──
+  it('quark ls fails gracefully without login', async () => {
+    await expectGracefulAuthFailure(['quark', 'ls', '-f', 'json']);
+  }, 60_000);
+
+  it('quark mkdir fails gracefully without login', async () => {
+    await expectGracefulAuthFailure(['quark', 'mkdir', 'test', '-f', 'json']);
+  }, 60_000);
+
+  it('quark mv fails gracefully without login', async () => {
+    await expectGracefulAuthFailure(['quark', 'mv', 'fakefid', '--to-fid', '0', '-f', 'json']);
+  }, 60_000);
+
+  it('quark rename fails gracefully without login', async () => {
+    await expectGracefulAuthFailure(['quark', 'rename', 'fakefid', '--name', 'new-name', '-f', 'json']);
+  }, 60_000);
+
+  it('quark rm fails gracefully without login', async () => {
+    await expectGracefulAuthFailure(['quark', 'rm', 'fakefid', '-f', 'json']);
+  }, 60_000);
+
+  it('quark save fails gracefully without login', async () => {
+    await expectGracefulAuthFailure(['quark', 'save', 'https://pan.quark.cn/s/abc123', '--to-fid', '0', '-f', 'json']);
+  }, 60_000);
+
+  it('quark share-tree fails gracefully without login', async () => {
+    await expectGracefulAuthFailure(['quark', 'share-tree', 'https://pan.quark.cn/s/abc123', '-f', 'json']);
   }, 60_000);
 });
