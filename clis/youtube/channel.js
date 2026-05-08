@@ -18,6 +18,111 @@ export function extractSelectedRichGridContents(browseData) {
     return Array.isArray(fallbackContents) ? fallbackContents : [];
 }
 
+export function readText(value) {
+    if (!value)
+        return '';
+    if (typeof value === 'string' || typeof value === 'number')
+        return String(value).trim();
+    if (typeof value.content === 'string')
+        return value.content.trim();
+    if (typeof value.simpleText === 'string')
+        return value.simpleText.trim();
+    if (typeof value.text === 'string')
+        return value.text.trim();
+    if (Array.isArray(value.runs)) {
+        return value.runs
+            .map(run => {
+                if (!run)
+                    return '';
+                if (typeof run.text === 'string')
+                    return run.text;
+                if (typeof run.content === 'string')
+                    return run.content;
+                if (typeof run.simpleText === 'string')
+                    return run.simpleText;
+                return readText(run);
+            })
+            .join('')
+            .trim();
+    }
+    const label = value.accessibility?.accessibilityData?.label
+        || value.accessibilityData?.label;
+    return label ? String(label).trim() : '';
+}
+
+export function extractChannelStats(source) {
+    const stats = { subscribers: '', videoCount: '' };
+    const hasCountishValue = (text) => /[0-9０-９,.万萬亿億千百KMBkmb]+|no\s+videos?/i.test(text);
+    const classify = (raw) => {
+        const text = String(raw || '').replace(/\s+/g, ' ').trim();
+        if (!text)
+            return;
+        if (!stats.subscribers && /subscribers?|订阅者|訂閱者|位订阅|位訂閱/i.test(text))
+            stats.subscribers = text;
+        if (!stats.videoCount
+            && hasCountishValue(text)
+            && (/(^|\b)videos?(\b|$)/i.test(text) || /视频|影片/.test(text))
+            && !/(views?|观看|觀看|浏览|瀏覽)/i.test(text)) {
+            stats.videoCount = text;
+        }
+    };
+    const addText = (value) => {
+        classify(readText(value));
+        classify(value?.accessibility?.accessibilityData?.label);
+        classify(value?.accessibilityData?.label);
+    };
+    const collectRows = (rows) => {
+        if (!Array.isArray(rows))
+            return;
+        for (const row of rows) {
+            for (const part of (row?.metadataParts || [])) {
+                addText(part?.text);
+                addText(part);
+            }
+        }
+    };
+    const collectHeader = (header) => {
+        if (!header || typeof header !== 'object')
+            return;
+        collectRows(header.content?.pageHeaderViewModel?.metadata?.contentMetadataViewModel?.metadataRows);
+        collectRows(header.pageHeaderViewModel?.metadata?.contentMetadataViewModel?.metadataRows);
+        collectRows(header.metadata?.contentMetadataViewModel?.metadataRows);
+        collectRows(header.metadataRows);
+        addText(header.subscriberCountText);
+        addText(header.videoCountText);
+        addText(header.videosCountText);
+    };
+    const walkAboutRenderers = (node, depth = 0) => {
+        if (!node || typeof node !== 'object' || depth > 8 || (stats.subscribers && stats.videoCount))
+            return;
+        if (node.aboutChannelRenderer || node.channelAboutFullMetadataRenderer) {
+            const about = node.aboutChannelRenderer || node.channelAboutFullMetadataRenderer;
+            collectRows(about.metadataRows);
+            const stack = [about];
+            while (stack.length && !(stats.subscribers && stats.videoCount)) {
+                const current = stack.pop();
+                if (!current || typeof current !== 'object')
+                    continue;
+                for (const [key, child] of Object.entries(current)) {
+                    if (/subscriberCountText|videoCountText|videosCountText|metadataRows/i.test(key)) {
+                        Array.isArray(child) ? collectRows(child) : addText(child);
+                    }
+                    if (child && typeof child === 'object')
+                        stack.push(child);
+                }
+            }
+        }
+        for (const child of Object.values(node))
+            walkAboutRenderers(child, depth + 1);
+    };
+    const header = source?.header || source || {};
+    collectHeader(header.pageHeaderRenderer || header.c4TabbedHeaderRenderer || header);
+    collectHeader(source?.pageHeaderRenderer);
+    collectHeader(source?.c4TabbedHeaderRenderer);
+    walkAboutRenderers(source);
+    return stats;
+}
+
 export function isShortsInput(input) {
     const raw = String(input || '').trim().replace(/[?#].*$/, '').replace(/\/+$/, '');
     if (!raw)
@@ -64,26 +169,18 @@ export function isVideosTab(tabEntry) {
         || tab?.title === 'Videos';
 }
 
+export function isAboutTab(tabEntry) {
+    const tab = tabEntry?.tabRenderer;
+    const url = tab?.endpoint?.commandMetadata?.webCommandMetadata?.url || '';
+    return tab?.tabIdentifier === 'ABOUT'
+        || url.replace(/\/+$/, '').endsWith('/about')
+        || ['About', '简介', '簡介', '關於', '关于'].includes(tab?.title || '');
+}
+
 export function extractShortsLockupVideo(item) {
     const lockup = item?.richItemRenderer?.content?.shortsLockupViewModel || item?.shortsLockupViewModel;
     if (!lockup)
         return null;
-    const readText = (value) => {
-        if (!value)
-            return '';
-        if (typeof value === 'string')
-            return value;
-        if (value.content)
-            return String(value.content);
-        if (value.simpleText)
-            return String(value.simpleText);
-        if (value.text)
-            return String(value.text);
-        if (Array.isArray(value.runs))
-            return value.runs.map(run => run.text || '').join('');
-        const label = value.accessibility?.accessibilityData?.label || value.accessibilityData?.label;
-        return label ? String(label) : '';
-    };
     const videoId = lockup.onTap?.innertubeCommand?.reelWatchEndpoint?.videoId
         || lockup.onTap?.innertubeCommand?.watchEndpoint?.videoId
         || lockup.navigationEndpoint?.reelWatchEndpoint?.videoId
@@ -180,10 +277,13 @@ cli({
         if (!apiKey || !context) return {error: 'YouTube config not found'};
         const requestedTab = ${JSON.stringify(tab)};
         const extractSelectedRichGridContents = ${extractSelectedRichGridContents.toString()};
+        const readText = ${readText.toString()};
+        const extractChannelStats = ${extractChannelStats.toString()};
         const isShortsInput = ${isShortsInput.toString()};
         const getChannelResolveUrl = ${getChannelResolveUrl.toString()};
         const isShortsTab = ${isShortsTab.toString()};
         const isVideosTab = ${isVideosTab.toString()};
+        const isAboutTab = ${isAboutTab.toString()};
         const extractShortsLockupVideo = ${extractShortsLockupVideo.toString()};
         const extractRichGridVideo = ${extractRichGridVideo.toString()};
 
@@ -216,26 +316,28 @@ cli({
 
         // Channel metadata
         const metadata = data.metadata?.channelMetadataRenderer || {};
-        const header = data.header?.pageHeaderRenderer || data.header?.c4TabbedHeaderRenderer || {};
+        const tabs = data.contents?.twoColumnBrowseResultsRenderer?.tabs || [];
+        const stats = extractChannelStats(data);
 
-        // Subscriber count from header
-        let subscriberCount = '';
-        try {
-          const rows = header.content?.pageHeaderViewModel?.metadata?.contentMetadataViewModel?.metadataRows || [];
-          for (const row of rows) {
-            for (const part of (row.metadataParts || [])) {
-              const text = part.text?.content || '';
-              if (text.includes('subscriber')) subscriberCount = text;
+        // Some locales/surfaces only expose video count on the About tab.
+        if (!stats.videoCount) {
+          const aboutTab = tabs.find(isAboutTab);
+          const aboutTabParams = aboutTab?.tabRenderer?.endpoint?.browseEndpoint?.params;
+          if (aboutTabParams) {
+            const aboutResp = await fetch('/youtubei/v1/browse?key=' + apiKey + '&prettyPrint=false', {
+              method: 'POST', credentials: 'include',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({context, browseId, params: aboutTabParams})
+            });
+            if (aboutResp.ok) {
+              const aboutStats = extractChannelStats(await aboutResp.json());
+              stats.subscribers = stats.subscribers || aboutStats.subscribers;
+              stats.videoCount = stats.videoCount || aboutStats.videoCount;
             }
           }
-        } catch {}
-        // Fallback for old c4TabbedHeaderRenderer format
-        if (!subscriberCount && header.subscriberCountText?.simpleText) {
-          subscriberCount = header.subscriberCountText.simpleText;
         }
 
         // Extract recent videos from Home tab
-        const tabs = data.contents?.twoColumnBrowseResultsRenderer?.tabs || [];
         const homeTab = tabs.find(t => t.tabRenderer?.selected);
         const recentVideos = [];
         const wantsShorts = requestedTab === 'shorts' || isShortsInput(channelId);
@@ -336,7 +438,8 @@ cli({
           channelId: metadata.externalId || browseId,
           handle: metadata.vanityChannelUrl?.split('/').pop() || '',
           description: (metadata.description || '').substring(0, 500),
-          subscribers: subscriberCount,
+          subscribers: stats.subscribers,
+          videoCount: stats.videoCount,
           url: metadata.channelUrl || 'https://www.youtube.com/channel/' + browseId,
           keywords: metadata.keywords || '',
           recentVideos,
@@ -358,6 +461,9 @@ export const __test__ = {
     formatChannelRows,
     getChannelResolveUrl,
     isShortsInput,
+    extractChannelStats,
+    isAboutTab,
     isShortsTab,
     isVideosTab,
+    readText,
 };
