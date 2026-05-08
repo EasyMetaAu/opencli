@@ -101,4 +101,60 @@ describe('tiktok/user', () => {
         expect(script).toContain("'bootstrap'");
         expect(script).toContain("'search-fallback'");
     });
+
+    it('replaces a low-quality bootstrap row with a more complete profile-api row for the same id', async () => {
+        const videoId = '7350000000000000000';
+        const bootstrapRow = {
+            id: videoId,
+            author: { uniqueId: 'dictogo', secUid: 'sec-1' },
+            desc: 'bootstrap title only',
+            createTime: 1710000000,
+        };
+        const profileApiRow = {
+            id: videoId,
+            author: { uniqueId: 'dictogo', secUid: 'sec-1' },
+            desc: 'profile api complete row',
+            createTime: 1710000100,
+            video: { cover: 'https://example.invalid/profile-cover.jpg' },
+            stats: { playCount: 456, diggCount: 45, commentCount: 6, shareCount: 7 },
+        };
+        const universal = {
+            userInfo: { user: { uniqueId: 'dictogo', secUid: 'sec-1' } },
+            itemList: [bootstrapRow],
+        };
+        const fetchMock = vi.fn(async (url) => {
+            const requestUrl = String(url);
+            if (requestUrl.includes('/api/post/item_list/')) {
+                return { ok: true, status: 200, text: async () => JSON.stringify({ status_code: 0, itemList: [profileApiRow], hasMore: false }) };
+            }
+            if (requestUrl.includes('/api/search/general/full/')) {
+                return { ok: true, status: 200, text: async () => JSON.stringify({ status_code: 0, data: [] }) };
+            }
+            throw new Error(`unexpected fetch ${requestUrl}`);
+        });
+
+        vi.stubGlobal('document', {
+            cookie: '',
+            querySelectorAll: () => [{ textContent: JSON.stringify(universal) }],
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        try {
+            const rows = await Function(`return (${__test__.buildUserScript('dictogo', 2)})`)();
+
+            expect(rows).toHaveLength(1);
+            expect(rows[0]).toMatchObject({
+                id: videoId,
+                source: 'profile-api',
+                title: 'profile api complete row',
+                cover: 'https://example.invalid/profile-cover.jpg',
+                plays: 456,
+                likes: 45,
+                comments: 6,
+                shares: 7,
+            });
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
 });
