@@ -1,6 +1,6 @@
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { AuthRequiredError, CommandExecutionError } from '@jackwener/opencli/errors';
-const BEARER_TOKEN = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
+import { TWITTER_BEARER_TOKEN, applyTopByEngagement } from './utils.js';
 const BOOKMARKS_QUERY_ID = 'Fy0QMy4q_aZCpkO0PnyLYw';
 const FEATURES = {
     rweb_video_screen_enabled: false,
@@ -101,12 +101,13 @@ cli({
     site: 'twitter',
     name: 'bookmarks',
     access: 'read',
-    description: 'Fetch Twitter/X bookmarks',
+    description: 'Fetch your Twitter/X bookmarks (the logged-in user\'s saved tweets, newest first)',
     domain: 'x.com',
     strategy: Strategy.COOKIE,
     browser: true,
     args: [
-        { name: 'limit', type: 'int', default: 20 },
+        { name: 'limit', type: 'int', default: 20, help: 'Maximum number of bookmarks to return (default 20).' },
+        { name: 'top-by-engagement', type: 'int', default: 0, help: 'When set to N>0, re-rank the bookmarks by weighted engagement (likes×1 + retweets×3 + replies×2 + bookmarks×5 + log10(views+1)×0.5) and return the top N. Default 0 keeps the API\'s native (saved-time) ordering.' },
     ],
     columns: ['id', 'author', 'text', 'likes', 'retweets', 'bookmarks', 'created_at', 'url'],
     func: async (page, kwargs) => {
@@ -143,7 +144,7 @@ cli({
       return null;
     }`) || BOOKMARKS_QUERY_ID;
         const headers = JSON.stringify({
-            'Authorization': `Bearer ${decodeURIComponent(BEARER_TOKEN)}`,
+            'Authorization': `Bearer ${decodeURIComponent(TWITTER_BEARER_TOKEN)}`,
             'X-Csrf-Token': ct0,
             'X-Twitter-Auth-Type': 'OAuth2Session',
             'X-Twitter-Active-User': 'yes',
@@ -169,6 +170,7 @@ cli({
                 break;
             cursor = nextCursor;
         }
-        return allTweets.slice(0, limit);
+        const trimmed = allTweets.slice(0, limit);
+        return applyTopByEngagement(trimmed, kwargs['top-by-engagement']);
     },
 });

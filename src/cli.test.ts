@@ -247,6 +247,7 @@ describe('createProgram root help descriptions', () => {
         strategy: Strategy.PUBLIC,
         browser: false,
         args: [{ name: 'limit', type: 'int', default: 20, help: 'Number of videos' }],
+        columns: ['title', 'url'],
       });
 
       const program = createProgram('', '');
@@ -261,14 +262,234 @@ describe('createProgram root help descriptions', () => {
           name: 'hot',
           access: 'read',
           description: 'Bilibili hot videos',
+          browser: false,
           example: 'opencli bilibili hot -f yaml',
-          args: [{ name: 'limit', type: 'int', default: 20 }],
+          command_options: [{ name: 'limit', type: 'int', default: 20 }],
+          columns: ['title', 'url'],
         },
       ]);
+      expect(data.commands[0]).not.toHaveProperty('args');
     } finally {
       process.argv = argv;
       registry.clear();
       for (const [key, value] of snapshot) registry.set(key, value);
+    }
+  });
+
+  it('renders per-site text help without per-command common option noise', () => {
+    const registry = getRegistry();
+    const snapshot = new Map(registry);
+    registry.clear();
+    try {
+      cli({
+        site: 'bilibili',
+        name: 'hot',
+        access: 'read',
+        description: 'Bilibili hot videos',
+        strategy: Strategy.PUBLIC,
+        browser: false,
+        args: [{ name: 'limit', type: 'int', default: 20, help: 'Number of videos' }],
+      });
+      cli({
+        site: 'bilibili',
+        name: 'video',
+        access: 'read',
+        description: 'Read one video',
+        domain: 'www.bilibili.com',
+        strategy: Strategy.PUBLIC,
+        browser: true,
+        args: [{ name: 'bvid', positional: true, required: true, help: 'Video id' }],
+      });
+
+      const program = createProgram('', '');
+      const site = program.commands.find(cmd => cmd.name() === 'bilibili');
+      expect(site).toBeTruthy();
+      const help = site!.helpInformation();
+
+      expect(help).toContain('hot [options]  [read] Bilibili hot videos');
+      expect(help).toContain('video <bvid>   [read] Read one video');
+      expect(help).toContain('hot [options]');
+      expect(help).not.toContain('video <bvid> [options]');
+      expect(help).not.toContain('\nOptions:');
+      expect(help).toContain('Common options:');
+      expect(help).toContain('-f, --format <fmt>');
+      expect(help).toContain('--trace <mode>');
+      expect(help).toContain('get all command args/options in one structured response');
+    } finally {
+      registry.clear();
+      for (const [key, value] of snapshot) registry.set(key, value);
+    }
+  });
+
+  it('separates command args from common options in structured help', () => {
+    const registry = getRegistry();
+    const snapshot = new Map(registry);
+    const argv = process.argv;
+    registry.clear();
+    try {
+      cli({
+        site: 'bilibili',
+        name: 'video',
+        access: 'read',
+        description: 'Read one video',
+        strategy: Strategy.PUBLIC,
+        domain: 'www.bilibili.com',
+        browser: true,
+        args: [
+          { name: 'bvid', positional: true, required: true, help: 'Video id' },
+          { name: 'with-comments', type: 'boolean', default: false, help: 'Include comments' },
+        ],
+        columns: ['title', 'url'],
+      });
+
+      const program = createProgram('', '');
+      const site = program.commands.find(cmd => cmd.name() === 'bilibili');
+      const command = site!.commands.find(cmd => cmd.name() === 'video');
+      expect(command).toBeTruthy();
+      process.argv = ['node', 'opencli', 'bilibili', 'video', '--help', '-f', 'yaml'];
+      const data = yaml.load(command!.helpInformation()) as any;
+
+      expect(data.usage).toBe('opencli bilibili video <bvid> [options]');
+      expect(data.browser).toBe(true);
+      expect(data.domain).toBe('www.bilibili.com');
+      expect(data.positionals).toMatchObject([{ name: 'bvid', positional: true, required: true }]);
+      expect(data.command_options).toMatchObject([{ name: 'with-comments', default: false }]);
+      expect(data.common_options.map((option: any) => option.name)).toEqual(['format', 'trace', 'verbose', 'help']);
+      expect(data.columns).toEqual(['title', 'url']);
+      expect(data).not.toHaveProperty('args');
+    } finally {
+      process.argv = argv;
+      registry.clear();
+      for (const [key, value] of snapshot) registry.set(key, value);
+    }
+  });
+
+  it('renders browser namespace structured help from Commander metadata', () => {
+    const argv = process.argv;
+    try {
+      const program = createProgram('', '');
+      const browser = program.commands.find(cmd => cmd.name() === 'browser');
+      expect(browser).toBeTruthy();
+
+      process.argv = ['node', 'opencli', 'browser', '--help', '-f', 'yaml'];
+      const data = yaml.load(browser!.helpInformation()) as any;
+
+      expect(data.namespace).toBe('browser');
+      expect(data.command).toBe('opencli browser');
+      expect(data.description).toBe('Browser control — navigate, click, type, extract, wait (no LLM needed)');
+      expect(data.command_count).toBeGreaterThan(20);
+      expect(data.namespace_options).toMatchObject([
+        {
+          name: 'workspace',
+          flags: '--workspace <name>',
+          takes_value: 'required',
+        },
+      ]);
+      expect(data.global_options).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          name: 'version',
+          flags: '-V, --version',
+        }),
+        expect.objectContaining({
+          name: 'profile',
+          flags: '--profile <name>',
+          takes_value: 'required',
+        }),
+      ]));
+
+      const click = data.commands.find((cmd: any) => cmd.name === 'click');
+      expect(click).toMatchObject({
+        command: 'opencli browser click',
+        usage: 'opencli browser click <target> [options]',
+        positionals: [{ name: 'target', required: true }],
+      });
+      expect(click.command_options.map((option: any) => option.name)).toEqual(['nth', 'tab']);
+
+      const tabList = data.commands.find((cmd: any) => cmd.name === 'tab list');
+      expect(tabList).toMatchObject({
+        command: 'opencli browser tab list',
+        usage: 'opencli browser tab list [options]',
+        command_options: [],
+      });
+
+      const getText = data.commands.find((cmd: any) => cmd.name === 'get text');
+      expect(getText).toMatchObject({
+        command: 'opencli browser get text',
+        positionals: [{ name: 'target', required: true }],
+      });
+      expect(data.structured_help).toMatchObject({
+        formats: ['yaml', 'json'],
+        usage: 'opencli browser --help -f yaml',
+      });
+    } finally {
+      process.argv = argv;
+    }
+  });
+
+  it('renders nested browser parent structured help for a subtree', () => {
+    const argv = process.argv;
+    try {
+      const program = createProgram('', '');
+      const browser = program.commands.find(cmd => cmd.name() === 'browser')!;
+      const tab = browser.commands.find(cmd => cmd.name() === 'tab');
+      expect(tab).toBeTruthy();
+
+      process.argv = ['node', 'opencli', 'browser', 'tab', '--help', '-f', 'yaml'];
+      const data = yaml.load(tab!.helpInformation()) as any;
+
+      expect(data).toMatchObject({
+        namespace: 'browser',
+        group: 'tab',
+        command: 'opencli browser tab',
+        usage: 'opencli browser tab <command> [args] [options]',
+        command_count: 4,
+      });
+      expect(data.commands.map((cmd: any) => cmd.name)).toEqual([
+        'tab close',
+        'tab list',
+        'tab new',
+        'tab select',
+      ]);
+      expect(data.commands.find((cmd: any) => cmd.name === 'tab close')).toMatchObject({
+        command: 'opencli browser tab close',
+        usage: 'opencli browser tab close [targetId] [options]',
+        positionals: [{ name: 'targetId', help: 'Target tab/page identity returned by "browser open", "browser tab new", or "browser tab list"' }],
+      });
+      expect(data.namespace_options.map((option: any) => option.name)).toEqual(['workspace']);
+      expect(data.structured_help).toMatchObject({
+        usage: 'opencli browser tab --help -f yaml',
+      });
+    } finally {
+      process.argv = argv;
+    }
+  });
+
+  it('renders browser command structured help without needing the full namespace dump', () => {
+    const argv = process.argv;
+    try {
+      const program = createProgram('', '');
+      const browser = program.commands.find(cmd => cmd.name() === 'browser')!;
+      const click = browser.commands.find(cmd => cmd.name() === 'click');
+      expect(click).toBeTruthy();
+
+      process.argv = ['node', 'opencli', 'browser', 'click', '--help', '-f', 'yaml'];
+      const data = yaml.load(click!.helpInformation()) as any;
+
+      expect(data).toMatchObject({
+        namespace: 'browser',
+        name: 'click',
+        command: 'opencli browser click',
+        usage: 'opencli browser click <target> [options]',
+        positionals: [{ name: 'target', required: true }],
+        structured_help: {
+          usage: 'opencli browser click --help -f yaml',
+        },
+      });
+      expect(data.command_options.map((option: any) => option.name)).toEqual(['nth', 'tab']);
+      expect(data.namespace_options.map((option: any) => option.name)).toEqual(['workspace']);
+      expect(data.global_options.map((option: any) => option.name)).toContain('profile');
+    } finally {
+      process.argv = argv;
     }
   });
 });
@@ -635,6 +856,67 @@ describe('browser tab targeting commands', () => {
 
     expect(mockBrowserConnect).toHaveBeenCalledWith({ timeout: 30, workspace: 'bound:default' });
     expect(browserState.page?.snapshot).toHaveBeenCalled();
+  });
+
+  it('passes the opt-in AX source to browser state', async () => {
+    const program = createProgram('', '');
+
+    await program.parseAsync(['node', 'opencli', 'browser', 'state', '--source', 'ax']);
+
+    expect(browserState.page?.snapshot).toHaveBeenCalledWith({ viewportExpand: 2000, source: 'ax' });
+  });
+
+  it('prints DOM vs AX snapshot metrics without changing default state output', async () => {
+    browserState.page = {
+      ...browserState.page,
+      snapshot: vi.fn(async (opts?: { source?: string }) => {
+        if (opts?.source === 'ax') {
+          return 'source: ax\n---\n[1]button "Save"\nframe "https://app.example/embed":\n  [2]button "Frame Save"\n---\ninteractive: 2';
+        }
+        return 'URL: https://app.example\n[1] button "Save"';
+      }),
+    } as unknown as IPage;
+    const program = createProgram('', '');
+
+    await program.parseAsync(['node', 'opencli', 'browser', 'state', '--compare-sources']);
+
+    expect(browserState.page?.snapshot).toHaveBeenCalledWith({ viewportExpand: 2000, source: 'dom' });
+    expect(browserState.page?.snapshot).toHaveBeenCalledWith({ viewportExpand: 2000, source: 'ax' });
+    const out = lastJsonLog();
+    expect(out.url).toBe('https://one.example');
+    expect(out.sources.dom).toMatchObject({ ok: true, refs: 1, frame_sections: 0 });
+    expect(out.sources.ax).toMatchObject({ ok: true, refs: 2, frame_sections: 1, interactive: 2 });
+  });
+
+  it('keeps compare-sources usable when one observation backend fails', async () => {
+    browserState.page = {
+      ...browserState.page,
+      snapshot: vi.fn(async (opts?: { source?: string }) => {
+        if (opts?.source === 'ax') throw new Error('AX unavailable');
+        return '[1] button "Save"';
+      }),
+    } as unknown as IPage;
+    const program = createProgram('', '');
+
+    await program.parseAsync(['node', 'opencli', 'browser', 'state', '--compare-sources']);
+
+    const out = lastJsonLog();
+    expect(out.sources.dom).toMatchObject({ ok: true, refs: 1 });
+    expect(out.sources.ax).toMatchObject({
+      ok: false,
+      error: { message: 'AX unavailable' },
+    });
+  });
+
+  it('rejects unknown browser state sources before touching the page', async () => {
+    const program = createProgram('', '');
+
+    await program.parseAsync(['node', 'opencli', 'browser', 'state', '--source', 'magic']);
+
+    expect(browserState.page?.snapshot).not.toHaveBeenCalled();
+    const out = lastJsonLog();
+    expect(out.error.code).toBe('invalid_source');
+    expect(process.exitCode).toBeDefined();
   });
 
   it('blocks history navigation on bound workspaces unless explicitly allowed', async () => {

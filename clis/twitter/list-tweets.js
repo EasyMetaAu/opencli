@@ -1,7 +1,7 @@
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { AuthRequiredError, CommandExecutionError } from '@jackwener/opencli/errors';
+import { TWITTER_BEARER_TOKEN, applyTopByEngagement } from './utils.js';
 
-const BEARER_TOKEN = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
 const LIST_TWEETS_QUERY_ID = 'RlZzktZY_9wJynoepm8ZsA';
 const OPERATION_NAME = 'ListLatestTweetsTimeline';
 
@@ -113,8 +113,9 @@ cli({
     strategy: Strategy.COOKIE,
     browser: true,
     args: [
-        { name: 'listId', positional: true, type: 'string', required: true },
+        { name: 'listId', positional: true, type: 'string', required: true, help: 'Numeric ID of a Twitter/X list (e.g. from `opencli twitter lists`)' },
         { name: 'limit', type: 'int', default: 50 },
+        { name: 'top-by-engagement', type: 'int', default: 0, help: 'When set to N>0, re-rank the list timeline by weighted engagement (likes×1 + retweets×3 + replies×2 + bookmarks×5 + log10(views+1)×0.5) and return the top N. Default 0 keeps the list\'s native (recency) ordering.' },
     ],
     columns: ['id', 'author', 'text', 'likes', 'retweets', 'replies', 'created_at', 'url'],
     func: async (page, kwargs) => {
@@ -155,7 +156,7 @@ cli({
             return null;
         }`) || LIST_TWEETS_QUERY_ID;
         const headers = JSON.stringify({
-            'Authorization': `Bearer ${decodeURIComponent(BEARER_TOKEN)}`,
+            'Authorization': `Bearer ${decodeURIComponent(TWITTER_BEARER_TOKEN)}`,
             'X-Csrf-Token': ct0,
             'X-Twitter-Auth-Type': 'OAuth2Session',
             'X-Twitter-Active-User': 'yes',
@@ -181,6 +182,7 @@ cli({
                 break;
             cursor = nextCursor;
         }
-        return allTweets.slice(0, limit);
+        const trimmed = allTweets.slice(0, limit);
+        return applyTopByEngagement(trimmed, kwargs['top-by-engagement']);
     },
 });
