@@ -124,6 +124,33 @@ export function extractRichGridVideo(item) {
     };
 }
 
+export function formatChannelRows(result) {
+    const videos = Array.isArray(result?.recentVideos) ? result.recentVideos : [];
+    const info = { ...(result || {}) };
+    delete info.recentVideos;
+    // Keep the legacy field/value rows while preserving structured Shorts data for JSON consumers.
+    const rows = Object.entries(info).map(([field, value]) => ({
+        field,
+        value: String(value),
+    }));
+    if (videos.length > 0) {
+        const sectionLabel = videos.some(v => v.url?.includes('/shorts/')) ? '--- Shorts ---' : '--- Recent Videos ---';
+        rows.push({ field: '---', value: sectionLabel });
+        for (const v of videos) {
+            const row = { field: v.title, value: `${v.duration} | ${v.views} | ${v.url}` };
+            if (v.url?.includes('/shorts/')) {
+                row.type = 'shorts';
+                row.videoId = v.videoId || '';
+                row.title = v.title || '';
+                row.viewCount = v.views || '';
+                row.url = v.url || '';
+            }
+            rows.push(row);
+        }
+    }
+    return rows;
+}
+
 cli({
     site: 'youtube',
     name: 'channel',
@@ -320,23 +347,7 @@ cli({
             throw new CommandExecutionError('Failed to fetch channel data');
         if (data.error)
             throw new CommandExecutionError(String(data.error));
-        const result = data;
-        const videos = result.recentVideos;
-        delete result.recentVideos;
-        // Channel info as field/value pairs + recent videos as table
-        const rows = Object.entries(result).map(([field, value]) => ({
-            field,
-            value: String(value),
-        }));
-        if (videos && videos.length > 0) {
-            const sectionLabel = videos.some(v => v.url?.includes('/shorts/')) ? '--- Shorts ---' : '--- Recent Videos ---';
-            rows.push({ field: '---', value: sectionLabel });
-            for (const v of videos) {
-                const videoId = v.videoId && v.url?.includes('/shorts/') ? `${v.videoId} | ` : '';
-                rows.push({ field: v.title, value: `${v.duration} | ${v.views} | ${videoId}${v.url}` });
-            }
-        }
-        return rows;
+        return formatChannelRows(data);
     },
 });
 
@@ -344,6 +355,7 @@ export const __test__ = {
     extractSelectedRichGridContents,
     extractRichGridVideo,
     extractShortsLockupVideo,
+    formatChannelRows,
     getChannelResolveUrl,
     isShortsInput,
     isShortsTab,
