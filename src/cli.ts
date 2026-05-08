@@ -19,7 +19,7 @@ import { PKG_VERSION } from './version.js';
 import { printCompletionScript } from './completion.js';
 import { loadExternalClis, executeExternalCli, installExternalCli, registerExternalCli, isBinaryInstalled } from './external.js';
 import { registerAllCommands } from './commanderAdapter.js';
-import { classifyAdapter, formatRootAdapterHelpText, installStructuredHelp, rootHelpData, type RootAdapterGroups } from './help.js';
+import { classifyAdapter, formatRootAdapterHelpText, installCommanderNamespaceStructuredHelp, installStructuredHelp, rootHelpData, type RootAdapterGroups } from './help.js';
 import { EXIT_CODES, getErrorMessage, BrowserConnectError } from './errors.js';
 import { TargetError, type TargetErrorCode } from './browser/target-errors.js';
 import { resolveTargetJs, getTextResolvedJs, getValueResolvedJs, getAttributesResolvedJs, selectResolvedJs, isAutocompleteResolvedJs, type ResolveOptions, type TargetMatchLevel } from './browser/target-resolver.js';
@@ -36,7 +36,7 @@ import { log } from './logger.js';
 import { bindTab, BrowserCommandError, fetchDaemonStatus, sendCommand } from './browser/daemon-client.js';
 import { aliasForContextId, loadProfileConfig, renameProfile, resolveProfileContextId, setDefaultProfile } from './browser/profile.js';
 import { formatDaemonVersion, isDaemonStale } from './browser/daemon-version.js';
-import type { ScreenshotOptions } from './types.js';
+import type { IPage, ScreenshotOptions } from './types.js';
 
 const CLI_FILE = fileURLToPath(import.meta.url);
 const DEFAULT_BROWSER_WORKSPACE = 'browser:default';
@@ -378,7 +378,9 @@ async function resolveStoredBrowserTarget(page: import('./types.js').IPage, scop
 async function getBrowserPage(targetPage?: string, workspace: string = DEFAULT_BROWSER_WORKSPACE, contextId?: string): Promise<import('./types.js').IPage> {
   const { BrowserBridge } = await import('./browser/index.js');
   const bridge = new BrowserBridge();
-  const envTimeout = process.env.OPENCLI_BROWSER_TIMEOUT;
+  // Idle timeout: how long the browser workspace lease stays alive between commands
+  // (controls when the automation tab is released). Not the per-command runtime timeout.
+  const envTimeout = process.env.OPENCLI_BROWSER_IDLE_TIMEOUT;
   const idleTimeout = envTimeout ? parseInt(envTimeout, 10) : undefined;
   const page = await bridge.connect({
     timeout: 30,
@@ -437,6 +439,45 @@ function getPageWorkspace(page: import('./types.js').IPage): string {
 function getPageScope(page: import('./types.js').IPage): string {
   const contextId = (page as unknown as { contextId?: unknown }).contextId;
   return getBrowserScope(getPageWorkspace(page), typeof contextId === 'string' && contextId.trim() ? contextId.trim() : undefined);
+}
+
+type SnapshotSource = 'dom' | 'ax';
+
+function snapshotMetricText(snapshot: unknown): string {
+  return typeof snapshot === 'string' ? snapshot : JSON.stringify(snapshot, null, 2);
+}
+
+function snapshotMetrics(snapshot: unknown, elapsedMs: number): Record<string, unknown> {
+  const text = snapshotMetricText(snapshot);
+  const interactiveMatch = text.match(/^interactive:\s*(\d+)\s*$/m);
+  return {
+    ok: true,
+    chars: text.length,
+    bytes: Buffer.byteLength(text, 'utf8'),
+    lines: text ? text.split(/\r?\n/).length : 0,
+    approx_tokens: Math.ceil(text.length / 4),
+    refs: (text.match(/(^|\n)\s*\[\d+\]/g) ?? []).length,
+    frame_sections: (text.match(/(^|\n)frame /g) ?? []).length,
+    ...(interactiveMatch ? { interactive: Number(interactiveMatch[1]) } : {}),
+    elapsed_ms: elapsedMs,
+  };
+}
+
+async function snapshotSourceMetrics(page: IPage, source: SnapshotSource): Promise<Record<string, unknown>> {
+  const started = Date.now();
+  try {
+    const snapshot = await page.snapshot({ viewportExpand: 2000, source });
+    return snapshotMetrics(snapshot, Date.now() - started);
+  } catch (err) {
+    return {
+      ok: false,
+      elapsed_ms: Date.now() - started,
+      error: {
+        ...(err instanceof Error && 'code' in err ? { code: String((err as { code?: unknown }).code) } : {}),
+        message: err instanceof Error ? err.message : String(err),
+      },
+    };
+  }
 }
 
 function resolveBrowserTabTarget(targetId?: string, opts?: { tab?: string } | Command): string | undefined {
@@ -626,6 +667,7 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
     .command('browser')
     .option('--workspace <name>', 'Browser workspace to use (default: browser:default; bound tabs use bound:<name>)')
     .description('Browser control — navigate, click, type, extract, wait (no LLM needed)');
+  const originalBrowserDescription = browser.description();
 
   /**
    * Resolve a `<target>` (numeric ref or CSS selector) via the unified resolver.
@@ -971,9 +1013,33 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
 
   // ── Inspect ──
 
-  addBrowserTabOption(browser.command('state').description('Page state: URL, title, interactive elements with [N] indices'))
-    .action(browserAction(async (page) => {
-      const snapshot = await page.snapshot({ viewportExpand: 2000 });
+  addBrowserTabOption(browser.command('state').description('Page state: URL, title, interactive elements with [N] indices')
+    .option('--source <source>', 'Snapshot backend: dom (default) or ax prototype', 'dom')
+    .option('--compare-sources', 'Print DOM vs AX snapshot metrics for observation promotion decisions', false))
+    .action(browserAction(async (page, opts) => {
+      if (opts.compareSources === true) {
+        const [dom, ax] = await Promise.all([
+          snapshotSourceMetrics(page, 'dom'),
+          snapshotSourceMetrics(page, 'ax'),
+        ]);
+        console.log(JSON.stringify({
+          url: await page.getCurrentUrl?.() ?? '',
+          sources: { dom, ax },
+        }, null, 2));
+        return;
+      }
+      const source = String(opts.source ?? 'dom').toLowerCase();
+      if (source !== 'dom' && source !== 'ax') {
+        console.log(JSON.stringify({
+          error: {
+            code: 'invalid_source',
+            message: `--source must be "dom" or "ax", got "${opts.source}"`,
+          },
+        }, null, 2));
+        process.exitCode = EXIT_CODES.USAGE_ERROR;
+        return;
+      }
+      const snapshot = await page.snapshot({ viewportExpand: 2000, source: source as 'dom' | 'ax' });
       const url = await page.getCurrentUrl?.() ?? '';
       console.log(`URL: ${url}\n`);
       console.log(typeof snapshot === 'string' ? snapshot : JSON.stringify(snapshot, null, 2));
@@ -2779,6 +2845,7 @@ cli({
   }
   const adapterGroups: RootAdapterGroups = { external: externalNames, apps, sites };
   const adapterNameSet = new Set<string>([...externalNames, ...siteNames]);
+  installCommanderNamespaceStructuredHelp(browser, { globalCommand: program, description: originalBrowserDescription });
   program.configureHelp({
     visibleCommands: (command) => command.commands.filter(child => command !== program || !adapterNameSet.has(child.name())),
   });

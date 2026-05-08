@@ -1,8 +1,8 @@
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { ArgumentError, AuthRequiredError, CommandExecutionError, EmptyResultError } from '@jackwener/opencli/errors';
 import { resolveTwitterQueryId, sanitizeQueryId } from './shared.js';
+import { TWITTER_BEARER_TOKEN } from './utils.js';
 
-const BEARER_TOKEN = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
 const FOLLOWING_QUERY_ID = 'zx6e-TLzRkeDO_a7p4b3JQ';  // Following fallback
 const USER_BY_SCREEN_NAME_QUERY_ID = 'qRednkZG-rn1P6b48NINmQ';
 
@@ -135,13 +135,19 @@ cli({
     site: 'twitter',
     name: 'following',
     access: 'read',
-    description: 'Get accounts a Twitter/X user is following',
+    description: 'Get accounts a Twitter/X user is following (defaults to the logged-in user when no user is given)',
     domain: 'x.com',
     strategy: Strategy.COOKIE,
     browser: true,
     args: [
-        { name: 'user', positional: true, type: 'string', required: false },
-        { name: 'limit', type: 'int', default: 50 },
+        {
+            name: 'user',
+            positional: true,
+            type: 'string',
+            required: false,
+            help: 'Twitter/X handle (with or without @). Omit to fetch the accounts the currently logged-in user follows.',
+        },
+        { name: 'limit', type: 'int', default: 50, help: 'Maximum number of following rows to return (default 50). Must be a positive integer.' },
     ],
     columns: ['screen_name', 'name', 'bio', 'followers'],
     func: async (page, kwargs) => {
@@ -176,7 +182,7 @@ cli({
         const followingQueryId = await resolveTwitterQueryId(page, 'Following', FOLLOWING_QUERY_ID);
         const userByScreenNameQueryId = await resolveTwitterQueryId(page, 'UserByScreenName', USER_BY_SCREEN_NAME_QUERY_ID);
         const headers = JSON.stringify({
-            'Authorization': `Bearer ${decodeURIComponent(BEARER_TOKEN)}`,
+            'Authorization': `Bearer ${decodeURIComponent(TWITTER_BEARER_TOKEN)}`,
             'X-Csrf-Token': ct0,
             'X-Twitter-Auth-Type': 'OAuth2Session',
             'X-Twitter-Active-User': 'yes',

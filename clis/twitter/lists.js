@@ -1,7 +1,7 @@
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { AuthRequiredError, CommandExecutionError } from '@jackwener/opencli/errors';
+import { TWITTER_BEARER_TOKEN } from './utils.js';
 
-const BEARER_TOKEN = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
 const LISTS_QUERY_ID = '78UbkyXwXBD98IgUWXOy9g';
 const OPERATION_NAME = 'ListsManagementPageTimeline';
 
@@ -93,7 +93,7 @@ export const command = cli({
     strategy: Strategy.COOKIE,
     browser: true,
     args: [
-        { name: 'limit', type: 'int', default: 50 },
+        { name: 'limit', type: 'int', default: 50, help: 'Maximum number of lists to return (default 50).' },
     ],
     columns: ['id', 'name', 'members', 'followers', 'mode'],
     func: async (page, kwargs) => {
@@ -130,7 +130,7 @@ export const command = cli({
             return null;
         }`) || LISTS_QUERY_ID;
         const headers = JSON.stringify({
-            'Authorization': `Bearer ${decodeURIComponent(BEARER_TOKEN)}`,
+            'Authorization': `Bearer ${decodeURIComponent(TWITTER_BEARER_TOKEN)}`,
             'X-Csrf-Token': ct0,
             'X-Twitter-Auth-Type': 'OAuth2Session',
             'X-Twitter-Active-User': 'yes',

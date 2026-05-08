@@ -79,13 +79,19 @@ cli({
     site: 'twitter',
     name: 'followers',
     access: 'read',
-    description: 'Get accounts following a Twitter/X user',
+    description: 'Get accounts following a Twitter/X user (defaults to the logged-in user when no user is given)',
     domain: 'x.com',
     strategy: Strategy.UI,
     browser: true,
     args: [
-        { name: 'user', positional: true, type: 'string', required: false },
-        { name: 'limit', type: 'int', default: 50 },
+        {
+            name: 'user',
+            positional: true,
+            type: 'string',
+            required: false,
+            help: 'Twitter/X handle (with or without @). Omit to fetch followers of the currently logged-in account.',
+        },
+        { name: 'limit', type: 'int', default: 50, help: 'Maximum number of follower rows to return (default 50). Must be a positive integer.' },
     ],
     // `followers` (count) is NOT exposed: the SPA followers-list view does not
     // render it. Use `twitter profile <user>` for per-user follower counts.
