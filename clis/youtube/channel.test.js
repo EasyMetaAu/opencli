@@ -99,4 +99,52 @@ describe('youtube channel helpers', () => {
         });
         expect(__test__.extractRichGridVideo({ richItemRenderer: { content: { shortsLockupViewModel: {} } } })).toBeNull();
     });
+
+    it('keeps field/value compatibility while exposing stable shorts JSON fields', () => {
+        const rows = __test__.formatChannelRows({
+            name: 'OpenAI',
+            recentVideos: [
+                {
+                    videoId: 'short-video-id',
+                    title: 'A short title',
+                    duration: 'Shorts',
+                    views: '42K views',
+                    url: 'https://www.youtube.com/shorts/short-video-id',
+                },
+            ],
+        });
+
+        const shortRow = rows.find(row => row.type === 'shorts');
+        expect(shortRow).toMatchObject({
+            field: 'A short title',
+            value: 'Shorts | 42K views | https://www.youtube.com/shorts/short-video-id',
+            type: 'shorts',
+            videoId: 'short-video-id',
+            title: 'A short title',
+            viewCount: '42K views',
+            url: 'https://www.youtube.com/shorts/short-video-id',
+        });
+        expect(shortRow.value).not.toContain(' | short-video-id | ');
+    });
+
+    it('does not add shorts-only JSON fields to normal channel video rows', () => {
+        const rows = __test__.formatChannelRows({
+            name: 'OpenAI',
+            recentVideos: [
+                {
+                    videoId: 'normal-video-id',
+                    title: 'A normal video',
+                    duration: '10:00',
+                    views: '1K views',
+                    url: 'https://www.youtube.com/watch?v=normal-video-id',
+                },
+            ],
+        });
+
+        const videoRow = rows.find(row => row.field === 'A normal video');
+        expect(videoRow).toEqual({
+            field: 'A normal video',
+            value: '10:00 | 1K views | https://www.youtube.com/watch?v=normal-video-id',
+        });
+    });
 });
