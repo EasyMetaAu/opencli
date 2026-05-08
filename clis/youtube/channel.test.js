@@ -70,6 +70,91 @@ describe('youtube channel helpers', () => {
         }))).toBe(true);
     });
 
+
+    it('extracts channel stats from pageHeaderRenderer metadata rows', () => {
+        const stats = __test__.extractChannelStats({
+            header: {
+                pageHeaderRenderer: {
+                    content: {
+                        pageHeaderViewModel: {
+                            metadata: {
+                                contentMetadataViewModel: {
+                                    metadataRows: [
+                                        {
+                                            metadataParts: [
+                                                {
+                                                    text: {
+                                                        content: '1.2M',
+                                                        accessibility: {
+                                                            accessibilityData: { label: '1.2M subscribers' },
+                                                        },
+                                                    },
+                                                },
+                                                { text: { simpleText: '321 videos' } },
+                                            ],
+                                        },
+                                    ],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        expect(stats).toEqual({ subscribers: '1.2M subscribers', videoCount: '321 videos' });
+    });
+
+    it('extracts channel stats from old c4TabbedHeaderRenderer fields', () => {
+        const stats = __test__.extractChannelStats({
+            header: {
+                c4TabbedHeaderRenderer: {
+                    subscriberCountText: { simpleText: '42K subscribers' },
+                    videosCountText: { runs: [{ text: '18' }, { text: ' videos' }] },
+                },
+            },
+        });
+
+        expect(stats).toEqual({ subscribers: '42K subscribers', videoCount: '18 videos' });
+    });
+
+    it('extracts localized Chinese subscriber and video counts', () => {
+        const stats = __test__.extractChannelStats({
+            pageHeaderRenderer: {
+                content: {
+                    pageHeaderViewModel: {
+                        metadata: {
+                            contentMetadataViewModel: {
+                                metadataRows: [
+                                    {
+                                        metadataParts: [
+                                            { text: { simpleText: '12万位订阅者' } },
+                                            { text: { runs: [{ text: '456' }, { text: ' 个视频' }] } },
+                                        ],
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        expect(stats).toEqual({ subscribers: '12万位订阅者', videoCount: '456 个视频' });
+    });
+
+    it('returns explicit empty strings when channel count fields are missing', () => {
+        expect(__test__.extractChannelStats({ header: { pageHeaderRenderer: {} } })).toEqual({
+            subscribers: '',
+            videoCount: '',
+        });
+        expect(__test__.formatChannelRows({ name: 'No Counts', subscribers: '', videoCount: '' })).toEqual([
+            { field: 'name', value: 'No Counts' },
+            { field: 'subscribers', value: '' },
+            { field: 'videoCount', value: '' },
+        ]);
+    });
+
     it('extracts shortsLockupViewModel items separately from videoRenderer items', () => {
         const short = __test__.extractShortsLockupVideo({
             richItemRenderer: {
