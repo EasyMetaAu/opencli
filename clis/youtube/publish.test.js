@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { getRegistry } from '@jackwener/opencli/registry';
-import { ArgumentError, AuthRequiredError, CommandExecutionError } from '@jackwener/opencli/errors';
+import { ArgumentError, AuthRequiredError } from '@jackwener/opencli/errors';
 import { publishCommand, __test__ } from './publish.js';
 
 function tempVideo() {
@@ -16,6 +16,7 @@ function tempVideo() {
 function pageReturning(result) {
     return {
         async evaluate() { return result; },
+        async evaluateWithArgs() { return result; },
         async wait() {},
     };
 }
@@ -42,8 +43,14 @@ describe('youtube publish adapter', () => {
         await expect(publishCommand.func({}, { video, title: 'x', account: 'brand' })).resolves.toMatchObject([{ code: 'unsupported_capability', capability: 'account' }]);
     });
 
-    it('maps auth and platform failures from publish polling', async () => {
-        await expect(__test__.waitForYouTubePublishResult(pageReturning({ error: 'auth', message: 'login' }))).rejects.toBeInstanceOf(AuthRequiredError);
-        await expect(__test__.waitForYouTubePublishResult(pageReturning({ error: 'platform', message: 'upload failed' }))).rejects.toBeInstanceOf(CommandExecutionError);
+    it('maps auth and platform failures from publish polling to stable codes', async () => {
+        await expect(__test__.waitForYouTubePublishResult(pageReturning({ text: 'session expired', anchors: [] }), 'public')).rejects.toBeInstanceOf(AuthRequiredError);
+        await expect(__test__.waitForYouTubePublishResult(pageReturning({ text: 'publish failed', anchors: [] }), 'public')).rejects.toMatchObject({ code: 'platform_error' });
+    });
+
+    it('does not treat upload-complete text as publish success and detects privacy mismatch', () => {
+        expect(__test__.classifyYouTubePublishState({ text: 'Upload complete. Processing will begin shortly.', privacy: 'public' })).toMatchObject({ pending: true });
+        expect(__test__.classifyYouTubePublishState({ text: 'Video published Private', privacy: 'public' })).toMatchObject({ error: 'platform' });
+        expect(__test__.classifyYouTubePublishState({ text: 'Video published Public', privacy: 'public', anchors: ['https://youtu.be/x'] })).toMatchObject({ ok: true, url: 'https://youtu.be/x' });
     });
 });

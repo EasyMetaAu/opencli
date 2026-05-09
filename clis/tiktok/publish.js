@@ -1,8 +1,10 @@
 import { cli, Strategy } from '@jackwener/opencli/registry';
-import { AuthRequiredError, CommandExecutionError } from '@jackwener/opencli/errors';
+import { AuthRequiredError } from '@jackwener/opencli/errors';
 import {
     buildDescriptionWithTags,
+    PUBLISH_ERROR_CODES,
     classifyPlatformFailure,
+    throwPublishFailure,
     requireBrowserUploadSupport,
     setFileInput,
     successResult,
@@ -85,7 +87,7 @@ async function waitForUploadReady(page) {
         classifyPlatformFailure(PLATFORM, DOMAIN, result, 'TikTok upload failed');
         await page.wait({ time: READY_POLL_MS / 1000 });
     }
-    throw new CommandExecutionError('TikTok upload did not become editable before timeout');
+    throwPublishFailure(PUBLISH_ERROR_CODES.uploadFailed, 'TikTok upload did not become editable before timeout');
 }
 
 async function fillTikTokCaption(page, text) {
@@ -120,7 +122,7 @@ async function clickTikTokPublish(page) {
         })()
     `);
     if (!result?.ok) {
-        throw new CommandExecutionError(result?.message || 'TikTok publish button was not found');
+        throwPublishFailure(PUBLISH_ERROR_CODES.platformError, result?.message || 'TikTok publish button was not found');
     }
 }
 
@@ -149,7 +151,7 @@ async function waitForTikTokPublishResult(page) {
         classifyPlatformFailure(PLATFORM, DOMAIN, result, 'TikTok publish failed');
         await page.wait({ time: SUBMIT_POLL_MS / 1000 });
     }
-    throw new CommandExecutionError('TikTok publish button clicked but result was unclear before timeout; check TikTok Studio manually.');
+    throwPublishFailure(PUBLISH_ERROR_CODES.platformError, 'TikTok publish button clicked but result was unclear before timeout; check TikTok Studio manually.');
 }
 
 export const publishCommand = cli({

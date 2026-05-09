@@ -80,7 +80,7 @@ Capability matrix:
 | Privacy | Supported | `public`, `unlisted`, and `private` visibility are selected in Studio when the UI exposes the radio buttons |
 | Account / channel selection | Unsupported | Uses the active YouTube Studio channel |
 
-Typed failures: invalid file/title/tag input raises `ArgumentError`; missing or expired login raises `AuthRequiredError`; upload/UI/platform failures raise `CommandExecutionError`. This gives service callers stable success, relogin, unsupported capability, validation, upload, and platform-failure branches without parsing browser logs.
+Typed failures: invalid file/title/tag input raises `ArgumentError`; missing or expired login raises `AuthRequiredError`; missing browser upload support returns `browser_unsupported`; upload input/file-transfer failures return `upload_failed`; Studio UI/platform state failures return `platform_error`. This gives service callers stable success, relogin, unsupported capability, validation, upload, browser-capability, and platform-failure branches without parsing browser logs.
 
 ## Prerequisites
 

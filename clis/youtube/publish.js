@@ -1,8 +1,10 @@
 import { cli, Strategy } from '@jackwener/opencli/registry';
-import { AuthRequiredError, CommandExecutionError } from '@jackwener/opencli/errors';
+import { AuthRequiredError } from '@jackwener/opencli/errors';
 import {
     buildDescriptionWithTags,
+    PUBLISH_ERROR_CODES,
     classifyPlatformFailure,
+    throwPublishFailure,
     requireBrowserUploadSupport,
     setFileInput,
     successResult,
@@ -103,7 +105,7 @@ async function waitForDetailsDialog(page) {
         classifyPlatformFailure(PLATFORM, DOMAIN, result, 'YouTube upload failed');
         await page.wait({ time: POLL_MS / 1000 });
     }
-    throw new CommandExecutionError('YouTube upload details dialog did not appear before timeout');
+    throwPublishFailure(PUBLISH_ERROR_CODES.uploadFailed, 'YouTube upload details dialog did not appear before timeout');
 }
 
 async function fillYouTubeDetails(page, title, description) {
@@ -126,27 +128,111 @@ async function fillYouTubeDetails(page, title, description) {
     classifyPlatformFailure(PLATFORM, DOMAIN, result, 'YouTube details fill failed');
 }
 
-async function chooseNotMadeForKids(page, madeForKids) {
-    const labels = madeForKids
-        ? ['Yes, it\'s made for kids', '是，为儿童打造']
-        : ['No, it\'s not made for kids', '不是，不是为儿童打造', 'No, it is not made for kids'];
+
+function normalizeBodyText(text) {
+    return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+const PRIVACY_TEXT = {
+    public: ['public', '公开'],
+    unlisted: ['unlisted', '不公开列出'],
+    private: ['private', '私享', '私密'],
+};
+
+function textMentionsPrivacy(text, privacy) {
+    const normalized = normalizeBodyText(text).toLowerCase();
+    return (PRIVACY_TEXT[privacy] || []).some((label) => normalized.includes(label.toLowerCase()));
+}
+
+function textMentionsOtherPrivacy(text, privacy) {
+    return Object.keys(PRIVACY_TEXT).some((candidate) => candidate !== privacy && textMentionsPrivacy(text, candidate));
+}
+
+export function classifyYouTubePublishState({ text = '', anchors = [], privacy = 'public' } = {}) {
+    const bodyText = normalizeBodyText(text);
+    if (/sign in|session expired|登录|会话/i.test(bodyText)) {
+        return { error: 'auth', message: 'YouTube login expired during publish' };
+    }
+    if (/failed|error|try again|copyright|policy|restriction|发布失败|上传失败|版权|违规/i.test(bodyText)) {
+        return { error: 'platform', message: bodyText.slice(0, 500) };
+    }
+
+    const uploadOnly = /upload complete|processing will begin|上传完成|处理将开始/i.test(bodyText);
+    const publishDone = /video published|published successfully|video is now public|changes saved|video saved|saved successfully|已发布|保存成功|已保存/i.test(bodyText);
+    if (!publishDone) {
+        return uploadOnly ? { pending: true, message: 'YouTube upload complete is not a publish success signal' } : null;
+    }
+
+    if (textMentionsOtherPrivacy(bodyText, privacy) && !textMentionsPrivacy(bodyText, privacy)) {
+        return { error: 'platform', message: `YouTube publish completed with unexpected visibility; expected ${privacy}` };
+    }
+    return { ok: true, url: anchors[0] || '', message: 'YouTube publish completed' };
+}
+
+async function clickAndVerifyYouTubeRadio(page, labels, settingName) {
     const result = await page.evaluateWithArgs(`
         (() => {
             ${visibleElementScript()}
-            const wanted = labels.map((label) => label.toLowerCase());
-            const candidates = Array.from(document.querySelectorAll('tp-yt-paper-radio-button, ytcp-radio-button, [role="radio"], label, div'));
+            const wanted = labels.map((label) => String(label).toLowerCase());
+            const candidates = Array.from(document.querySelectorAll('tp-yt-paper-radio-button, ytcp-radio-button, [role="radio"], label'));
+            function isChecked(el) {
+                return el.checked === true
+                    || el.getAttribute('aria-checked') === 'true'
+                    || el.getAttribute('checked') === 'true'
+                    || el.hasAttribute('checked')
+                    || el.classList?.contains('iron-selected')
+                    || el.classList?.contains('checked');
+            }
             for (const el of candidates) {
                 const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().toLowerCase();
                 if (!text || text.length > 240 || !isVisible(el)) continue;
                 if (wanted.some((label) => text.includes(label))) {
                     el.click();
+                    return { ok: true, text, checked: isChecked(el) };
+                }
+            }
+            return { ok: false, message: settingName + ' radio was not found' };
+        })()
+    `, { labels, settingName });
+    if (!result?.ok) {
+        throwPublishFailure(PUBLISH_ERROR_CODES.platformError, result?.message || `YouTube ${settingName} radio was not found`);
+    }
+
+    await page.wait({ time: 0.3 });
+    const verified = await page.evaluateWithArgs(`
+        (() => {
+            const wanted = labels.map((label) => String(label).toLowerCase());
+            const candidates = Array.from(document.querySelectorAll('tp-yt-paper-radio-button, ytcp-radio-button, [role="radio"], label'));
+            function radioSelected(el) {
+                const nodes = [el, el.closest?.('[role="radio"]'), el.querySelector?.('[role="radio"]'), el.querySelector?.('input[type="radio"]')].filter(Boolean);
+                return nodes.some((node) => node.checked === true
+                    || node.getAttribute?.('aria-checked') === 'true'
+                    || node.getAttribute?.('checked') === 'true'
+                    || node.hasAttribute?.('checked')
+                    || node.classList?.contains('iron-selected')
+                    || node.classList?.contains('checked'));
+            }
+            for (const el of candidates) {
+                const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                if (!text || text.length > 240) continue;
+                if (wanted.some((label) => text.includes(label)) && radioSelected(el)) {
                     return { ok: true, text };
                 }
             }
-            return { ok: false, message: 'made-for-kids radio was not found' };
+            return { ok: false, message: settingName + ' radio selection could not be confirmed after click' };
         })()
-    `, { labels });
-    return result?.ok;
+    `, { labels, settingName });
+    if (!verified?.ok) {
+        throwPublishFailure(PUBLISH_ERROR_CODES.platformError, verified?.message || `YouTube ${settingName} radio selection could not be confirmed`);
+    }
+    return verified;
+}
+
+async function chooseNotMadeForKids(page, madeForKids) {
+    const labels = madeForKids
+        ? ['Yes, it\'s made for kids', '是，为儿童打造']
+        : ['No, it\'s not made for kids', '不是，不是为儿童打造', 'No, it is not made for kids'];
+    await clickAndVerifyYouTubeRadio(page, labels, 'made-for-kids');
 }
 
 async function goThroughChecks(page, privacy) {
@@ -163,43 +249,12 @@ async function goThroughChecks(page, privacy) {
         await page.wait({ time: 1.2 });
     }
 
-    if (privacy !== 'public') {
-        const labels = privacy === 'private'
-            ? ['Private', '私享', '私密']
-            : ['Unlisted', '不公开列出'];
-        await page.evaluateWithArgs(`
-            (() => {
-                ${visibleElementScript()}
-                const wanted = labels.map((label) => label.toLowerCase());
-                const radios = Array.from(document.querySelectorAll('tp-yt-paper-radio-button, ytcp-radio-button, [role="radio"], label, div'));
-                for (const el of radios) {
-                    const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().toLowerCase();
-                    if (text && text.length < 200 && isVisible(el) && wanted.some((label) => text.includes(label))) {
-                        el.click();
-                        return { ok: true, text };
-                    }
-                }
-                return { ok: false };
-            })()
-        `, { labels });
-    } else {
-        await page.evaluate(`
-            (() => {
-                ${visibleElementScript()}
-                const labels = ['Public', '公开'];
-                const wanted = labels.map((label) => label.toLowerCase());
-                const radios = Array.from(document.querySelectorAll('tp-yt-paper-radio-button, ytcp-radio-button, [role="radio"], label, div'));
-                for (const el of radios) {
-                    const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().toLowerCase();
-                    if (text && text.length < 200 && isVisible(el) && wanted.some((label) => text.includes(label))) {
-                        el.click();
-                        return { ok: true, text };
-                    }
-                }
-                return { ok: false };
-            })()
-        `);
-    }
+    const labels = privacy === 'private'
+        ? ['Private', '私享', '私密']
+        : privacy === 'unlisted'
+            ? ['Unlisted', '不公开列出']
+            : ['Public', '公开'];
+    await clickAndVerifyYouTubeRadio(page, labels, 'privacy');
 }
 
 async function clickPublish(page) {
@@ -210,37 +265,26 @@ async function clickPublish(page) {
         })()
     `);
     if (!result?.ok) {
-        throw new CommandExecutionError(result?.message || 'YouTube publish/save button was not found');
+        throwPublishFailure(PUBLISH_ERROR_CODES.platformError, result?.message || 'YouTube publish/save button was not found');
     }
 }
 
-async function waitForYouTubePublishResult(page) {
+async function waitForYouTubePublishResult(page, privacy) {
     const deadline = Date.now() + PUBLISH_TIMEOUT_MS;
     while (Date.now() < deadline) {
-        const result = await page.evaluate(`
+        const result = await page.evaluateWithArgs(`
             (() => {
                 const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
                 const anchors = Array.from(document.querySelectorAll('a[href*="watch?v="], a[href*="youtu.be/"]')).map((a) => a.href).filter(Boolean);
-                if (/video published|video is now public|upload complete|processing will begin|已发布|上传完成|处理完毕/i.test(text)) {
-                    return { ok: true, url: anchors[0] || '', message: 'YouTube publish completed' };
-                }
-                if (anchors.length && /share|copy video link|视频链接|复制/i.test(text)) {
-                    return { ok: true, url: anchors[0], message: 'YouTube publish completed' };
-                }
-                if (/sign in|session expired|登录|会话/i.test(text) && /accounts\.google\.com/i.test(location.href)) {
-                    return { error: 'auth', message: 'YouTube login expired during publish' };
-                }
-                if (/failed|error|try again|copyright|policy|restriction|发布失败|上传失败|版权|违规/i.test(text)) {
-                    return { error: 'platform', message: text.slice(0, 500) };
-                }
-                return null;
+                return { text, anchors, privacy };
             })()
-        `);
-        if (result?.ok) return result;
-        classifyPlatformFailure(PLATFORM, DOMAIN, result, 'YouTube publish failed');
+        `, { privacy });
+        const state = classifyYouTubePublishState(result);
+        if (state?.ok) return state;
+        classifyPlatformFailure(PLATFORM, DOMAIN, state, 'YouTube publish failed');
         await page.wait({ time: POLL_MS / 1000 });
     }
-    throw new CommandExecutionError('YouTube publish button clicked but result was unclear before timeout; check YouTube Studio manually.');
+    throwPublishFailure(PUBLISH_ERROR_CODES.platformError, 'YouTube publish/save clicked but final publish state was not confirmed before timeout; check YouTube Studio manually.');
 }
 
 export const publishCommand = cli({
@@ -284,7 +328,7 @@ export const publishCommand = cli({
         await fillYouTubeDetails(page, input.title, description);
         await goThroughChecks(page, input.privacy);
         await clickPublish(page);
-        const publishResult = await waitForYouTubePublishResult(page);
+        const publishResult = await waitForYouTubePublishResult(page, input.privacy);
 
         return successResult(PLATFORM, publishResult.message || 'YouTube publish completed', {
             url: publishResult.url || '',
@@ -296,5 +340,6 @@ export const publishCommand = cli({
 export const __test__ = {
     unsupportedForInput,
     fillYouTubeDetails,
+    classifyYouTubePublishState,
     waitForYouTubePublishResult,
 };

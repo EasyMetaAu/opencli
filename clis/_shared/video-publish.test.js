@@ -2,11 +2,13 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ArgumentError, CommandExecutionError } from '@jackwener/opencli/errors';
+import { ArgumentError } from '@jackwener/opencli/errors';
 import {
     buildDescriptionWithTags,
+    classifyPlatformFailure,
     parseTags,
     requireBrowserUploadSupport,
+    setFileInput,
     unsupportedResult,
     validateVideoPublishInput,
 } from './video-publish.js';
@@ -54,7 +56,22 @@ describe('video publish shared helpers', () => {
         }]);
     });
 
-    it('classifies missing browser upload support as upload-capability failure', async () => {
-        await expect(requireBrowserUploadSupport({}, 'tiktok')).rejects.toBeInstanceOf(CommandExecutionError);
+    it('classifies browser capability and upload failures with stable codes', async () => {
+        await expect(requireBrowserUploadSupport({}, 'tiktok')).rejects.toMatchObject({ code: 'browser_unsupported' });
+        await expect(setFileInput({
+            async evaluate() { return 'input[type=\"file\"]'; },
+            async wait() {},
+        }, ['video.mp4'], ['input[type=\"file\"]'], 'youtube')).rejects.toMatchObject({ code: 'upload_failed' });
+        expect(() => classifyPlatformFailure('youtube', 'studio.youtube.com', { error: 'upload', message: 'upload failed' })).toThrowError(/upload failed/);
+        try {
+            classifyPlatformFailure('youtube', 'studio.youtube.com', { error: 'upload', message: 'upload failed' });
+        } catch (error) {
+            expect(error).toMatchObject({ code: 'upload_failed' });
+        }
+        try {
+            classifyPlatformFailure('youtube', 'studio.youtube.com', { error: 'platform', message: 'studio rejected' });
+        } catch (error) {
+            expect(error).toMatchObject({ code: 'platform_error' });
+        }
     });
 });

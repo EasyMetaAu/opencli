@@ -213,7 +213,7 @@ Capability matrix:
 | Privacy | Public only | `friends` / `private` return `capability=privacy` |
 | Account selection | Unsupported | Uses the active logged-in TikTok Studio account |
 
-Typed failures: invalid file/title/tag input raises `ArgumentError`; missing or expired login raises `AuthRequiredError`; upload/UI/platform failures raise `CommandExecutionError`. This lets server callers distinguish validation, relogin, unsupported capability, upload failure, and platform failure without parsing browser logs.
+Typed failures: invalid file/title/tag input raises `ArgumentError`; missing or expired login raises `AuthRequiredError`; missing browser upload support returns `browser_unsupported`; upload input/file-transfer failures return `upload_failed`; Studio UI/platform state failures return `platform_error`. This lets server callers distinguish validation, relogin, unsupported capability, upload failure, browser capability, and platform failure without parsing browser logs.
 
 ## Validation (no silent clamp)
 

@@ -1,9 +1,23 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { ArgumentError, AuthRequiredError, CommandExecutionError, getErrorMessage } from '@jackwener/opencli/errors';
+import { ArgumentError, AuthRequiredError, CliError, getErrorMessage } from '@jackwener/opencli/errors';
 
 export const SUPPORTED_VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm']);
 export const SUPPORTED_COVER_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+
+export const PUBLISH_ERROR_CODES = {
+    uploadFailed: 'upload_failed',
+    platformError: 'platform_error',
+    browserUnsupported: 'browser_unsupported',
+};
+
+export function publishFailure(code, message, hint) {
+    return new CliError(code, message, hint);
+}
+
+export function throwPublishFailure(code, message, hint) {
+    throw publishFailure(code, message, hint);
+}
 
 function normalizeText(value) {
     return String(value ?? '').trim();
@@ -133,19 +147,25 @@ export function classifyPlatformFailure(platform, domain, result, fallbackMessag
         throw new ArgumentError(result.message || `${platform} publish validation failed`);
     }
     if (result?.error === 'upload') {
-        throw new CommandExecutionError(result.message || `${platform} video upload failed`);
+        throwPublishFailure(PUBLISH_ERROR_CODES.uploadFailed, result.message || `${platform} video upload failed`);
+    }
+    if (result?.error === 'browser') {
+        throwPublishFailure(PUBLISH_ERROR_CODES.browserUnsupported, result.message || `${platform} publish requires browser capability that is not available`);
+    }
+    if (result?.error === 'platform') {
+        throwPublishFailure(PUBLISH_ERROR_CODES.platformError, result.message || fallbackMessage || `${platform} publish failed`);
     }
     if (result?.error) {
-        throw new CommandExecutionError(result.message || fallbackMessage || `${platform} publish failed`);
+        throwPublishFailure(PUBLISH_ERROR_CODES.platformError, result.message || fallbackMessage || `${platform} publish failed`);
     }
 }
 
 export async function requireBrowserUploadSupport(page, platform) {
     if (!page) {
-        throw new CommandExecutionError(`${platform} publish requires a browser session`);
+        throwPublishFailure(PUBLISH_ERROR_CODES.browserUnsupported, `${platform} publish requires a browser session`);
     }
     if (!page.setFileInput) {
-        throw new CommandExecutionError('Browser extension does not support file upload. Please update OpenCLI browser support.');
+        throwPublishFailure(PUBLISH_ERROR_CODES.browserUnsupported, 'Browser extension does not support file upload. Please update OpenCLI browser support.');
     }
 }
 
@@ -166,12 +186,12 @@ export async function waitForAnySelector(page, selectors, timeoutMs = 30_000, in
 export async function setFileInput(page, files, selectors, platform) {
     const selector = await waitForAnySelector(page, selectors, 45_000, 750);
     if (!selector) {
-        throw new CommandExecutionError(`${platform} upload failed: file input was not found`);
+        throwPublishFailure(PUBLISH_ERROR_CODES.uploadFailed, `${platform} upload failed: file input was not found`);
     }
     try {
         await page.setFileInput(files, selector);
     } catch (error) {
-        throw new CommandExecutionError(`${platform} upload failed while setting file input: ${getErrorMessage(error)}`);
+        throwPublishFailure(PUBLISH_ERROR_CODES.uploadFailed, `${platform} upload failed while setting file input: ${getErrorMessage(error)}`);
     }
     return selector;
 }
