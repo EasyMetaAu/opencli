@@ -15,6 +15,7 @@
 | `opencli tiktok live` | Browse live streams |
 | `opencli tiktok notifications` | Get notifications |
 | `opencli tiktok creator-videos` | List TikTok Studio creator videos and metrics |
+| `opencli tiktok publish` | Publish a local video through TikTok Studio |
 | `opencli tiktok like` | Like a video |
 | `opencli tiktok unlike` | Unlike a video |
 | `opencli tiktok save` | Add to Favorites |
@@ -46,6 +47,13 @@ opencli tiktok following
 
 # List your TikTok Studio creator videos
 opencli tiktok creator-videos --limit 20
+
+# Publish a local video and return structured JSON
+opencli tiktok publish ./video.mp4 \
+  --title "Launch demo" \
+  --description "Uploaded by OpenCLI" \
+  --tags "opencli,demo" \
+  --format json
 
 # Friend suggestions
 opencli tiktok friends --limit 10
@@ -177,6 +185,35 @@ callers can distinguish "we just did it" from "it was already done".
 | `username` | string | Target user's `uniqueId` (without `@`) |
 | `url` | string | Canonical profile URL |
 | `result` | enum | `unfollowed` / `already-not-following` |
+
+### `publish`
+
+`publish` uploads a local video through TikTok Studio using the active browser session and returns one structured row. Use `--format json` for service integrations.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `ok` | bool | `true` only when OpenCLI observed a publish success signal |
+| `platform` | string | `tiktok` |
+| `status` | enum | `success` / `unsupported` |
+| `code` | enum | `success` / `unsupported_capability` |
+| `capability` | string | Unsupported capability name, otherwise empty |
+| `message` | string | Human-readable publish result or failure reason |
+| `url` | string | Published video URL when TikTok exposes it after publish |
+| `draft` | bool | Always `false` for the current immediate-publish path |
+
+Capability matrix:
+
+| Capability | Status | Notes |
+|------------|--------|-------|
+| Immediate publish | Supported | `opencli tiktok publish <video> --title ... --format json` |
+| Draft | Unsupported | Returns `code=unsupported_capability`, `capability=draft` |
+| Scheduled publish | Unsupported | Returns `capability=schedule`; no silent downgrade to immediate publish |
+| Cover / thumbnail | Unsupported | Returns `capability=cover` |
+| Tags | Supported | Comma-separated `--tags` are written into the caption as hashtags |
+| Privacy | Public only | `friends` / `private` return `capability=privacy` |
+| Account selection | Unsupported | Uses the active logged-in TikTok Studio account |
+
+Typed failures: invalid file/title/tag input raises `ArgumentError`; missing or expired login raises `AuthRequiredError`; missing browser upload support returns `browser_unsupported`; upload input/file-transfer failures return `upload_failed`; Studio UI/platform state failures return `platform_error`. This lets server callers distinguish validation, relogin, unsupported capability, upload failure, browser capability, and platform failure without parsing browser logs.
 
 ## Validation (no silent clamp)
 
