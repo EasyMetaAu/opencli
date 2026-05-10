@@ -502,6 +502,114 @@ describe('createProgram root help descriptions', () => {
       process.argv = argv;
     }
   });
+
+  it('renders daemon namespace structured help with leaves and global options', () => {
+    const argv = process.argv;
+    try {
+      const program = createProgram('', '');
+      const daemon = program.commands.find(cmd => cmd.name() === 'daemon')!;
+      expect(daemon).toBeTruthy();
+
+      process.argv = ['node', 'opencli', 'daemon', '--help', '-f', 'yaml'];
+      const data = yaml.load(daemon.helpInformation()) as any;
+
+      expect(data).toMatchObject({
+        namespace: 'daemon',
+        command: 'opencli daemon',
+        usage: 'opencli daemon <command> [args] [options]',
+        description: 'Manage the opencli daemon',
+        command_count: 3,
+        namespace_options: [],
+        structured_help: { usage: 'opencli daemon --help -f yaml' },
+      });
+      expect(data.commands.map((cmd: any) => cmd.name)).toEqual(['restart', 'status', 'stop']);
+      expect(data.global_options.map((option: any) => option.name)).toEqual(expect.arrayContaining(['version', 'profile']));
+    } finally {
+      process.argv = argv;
+    }
+  });
+
+  it('renders plugin namespace structured help with positional + option leaves', () => {
+    const argv = process.argv;
+    try {
+      const program = createProgram('', '');
+      const plugin = program.commands.find(cmd => cmd.name() === 'plugin')!;
+      expect(plugin).toBeTruthy();
+
+      process.argv = ['node', 'opencli', 'plugin', '--help', '-f', 'yaml'];
+      const data = yaml.load(plugin.helpInformation()) as any;
+
+      expect(data).toMatchObject({
+        namespace: 'plugin',
+        command: 'opencli plugin',
+        description: 'Manage opencli plugins',
+        namespace_options: [],
+      });
+      expect(data.commands.map((cmd: any) => cmd.name)).toEqual(['create', 'install', 'list', 'uninstall', 'update']);
+      const update = data.commands.find((cmd: any) => cmd.name === 'update');
+      expect(update).toMatchObject({
+        usage: 'opencli plugin update [name] [options]',
+        positionals: [{ name: 'name' }],
+      });
+      expect(update.command_options.map((option: any) => option.name)).toEqual(['all']);
+    } finally {
+      process.argv = argv;
+    }
+  });
+
+  it('renders adapter namespace structured help preserving original description after applyRootSubcommandSummaries', () => {
+    const argv = process.argv;
+    try {
+      const program = createProgram('', '');
+      const adapter = program.commands.find(cmd => cmd.name() === 'adapter')!;
+      expect(adapter).toBeTruthy();
+
+      process.argv = ['node', 'opencli', 'adapter', '--help', '-f', 'yaml'];
+      const data = yaml.load(adapter.helpInformation()) as any;
+
+      // applyRootSubcommandSummaries() rewrites .description() to a child-name listing;
+      // structured help must surface the original product description via the snapshot.
+      expect(data.description).toBe('Manage CLI adapters');
+      expect(data.commands.map((cmd: any) => cmd.name)).toEqual(['eject', 'reset', 'status']);
+      const reset = data.commands.find((cmd: any) => cmd.name === 'reset');
+      expect(reset).toMatchObject({
+        usage: 'opencli adapter reset [site] [options]',
+        positionals: [{ name: 'site' }],
+      });
+      expect(reset.command_options.map((option: any) => option.name)).toEqual(['all']);
+    } finally {
+      process.argv = argv;
+    }
+  });
+
+  it('renders profile namespace structured help including required positionals', () => {
+    const argv = process.argv;
+    try {
+      const program = createProgram('', '');
+      const profile = program.commands.find(cmd => cmd.name() === 'profile')!;
+      expect(profile).toBeTruthy();
+
+      process.argv = ['node', 'opencli', 'profile', '--help', '-f', 'yaml'];
+      const data = yaml.load(profile.helpInformation()) as any;
+
+      expect(data).toMatchObject({
+        namespace: 'profile',
+        description: 'Manage Browser Bridge Chrome profiles',
+        command_count: 3,
+      });
+      expect(data.commands.map((cmd: any) => cmd.name)).toEqual(['list', 'rename', 'use']);
+      const rename = data.commands.find((cmd: any) => cmd.name === 'rename');
+      expect(rename).toMatchObject({
+        usage: 'opencli profile rename <contextId> <alias> [options]',
+        positionals: [
+          { name: 'contextId', required: true },
+          { name: 'alias', required: true },
+        ],
+      });
+    } finally {
+      process.argv = argv;
+    }
+  });
 });
 
 describe('resolveBrowserVerifyInvocation', () => {

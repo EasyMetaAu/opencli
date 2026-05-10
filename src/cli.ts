@@ -2870,6 +2870,8 @@ cli({
   // ── Plugin management ──────────────────────────────────────────────────────
 
   const pluginCmd = program.command('plugin').description('Manage opencli plugins');
+  // Snapshot before applyRootSubcommandSummaries() rewrites .description() to a child-name listing.
+  const originalPluginDescription = pluginCmd.description();
 
   pluginCmd
     .command('install')
@@ -3064,6 +3066,8 @@ cli({
 
   // ── Built-in: adapter management ─────────────────────────────────────────
   const adapterCmd = program.command('adapter').description('Manage CLI adapters');
+  // Snapshot before applyRootSubcommandSummaries() rewrites .description() to a child-name listing.
+  const originalAdapterDescription = adapterCmd.description();
 
   adapterCmd
     .command('status')
@@ -3179,6 +3183,8 @@ cli({
 
   // ── Built-in: browser profile selection ──────────────────────────────────
   const profileCmd = program.command('profile').description('Manage Browser Bridge Chrome profiles');
+  // Snapshot before applyRootSubcommandSummaries() rewrites .description() to a child-name listing.
+  const originalProfileDescription = profileCmd.description();
 
   profileCmd
     .command('list')
@@ -3260,6 +3266,8 @@ cli({
 
   // ── Built-in: daemon ──────────────────────────────────────────────────────
   const daemonCmd = program.command('daemon').description('Manage the opencli daemon');
+  // Snapshot before applyRootSubcommandSummaries() rewrites .description() to a child-name listing.
+  const originalDaemonDescription = daemonCmd.description();
   daemonCmd
     .command('status')
     .description('Show daemon status')
@@ -3393,6 +3401,10 @@ cli({
   const adapterGroups: RootAdapterGroups = { external: externalNames, apps, sites };
   const adapterNameSet = new Set<string>([...externalNames, ...siteNames]);
   installCommanderNamespaceStructuredHelp(browser, { globalCommand: program, description: originalBrowserDescription });
+  installCommanderNamespaceStructuredHelp(daemonCmd, { globalCommand: program, description: originalDaemonDescription });
+  installCommanderNamespaceStructuredHelp(pluginCmd, { globalCommand: program, description: originalPluginDescription });
+  installCommanderNamespaceStructuredHelp(adapterCmd, { globalCommand: program, description: originalAdapterDescription });
+  installCommanderNamespaceStructuredHelp(profileCmd, { globalCommand: program, description: originalProfileDescription });
   program.configureHelp({
     visibleCommands: (command) => command.commands.filter(child => command !== program || !adapterNameSet.has(child.name())),
   });
