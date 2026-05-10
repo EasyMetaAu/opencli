@@ -4,6 +4,10 @@
 
 Extension bumped to 1.0.9 (Accessibility.enable allowlist + downloads permission + cross-origin frame target attach for AX). Major Browser Agent Runtime release: full Phase 0/1/2 alignment with `vercel-labs/agent-browser` model — CDP-primary input, AX snapshot/refs with stale recovery, semantic locators across all primitives, full form toolbelt (hover/focus/dblclick/check/uncheck/upload/drag/wait-download), annotated screenshots, and same-origin iframe AX routing. Cross-origin OOPIF AX is best-effort (Chrome extension API limitation).
 
+### ⚠ BREAKING CHANGES
+
+* **browser lifecycle** — replace `--focus` / `OPENCLI_WINDOW_FOCUSED` with `--window foreground|background` / `OPENCLI_WINDOW`, and replace `--live` / `OPENCLI_LIVE` with `--keep-tab true|false` / `OPENCLI_KEEP_TAB`. `opencli browser *` defaults to a foreground window and keeps its tab; browser-backed adapter commands default to a background automation window and release their tab unless the adapter uses site-level reuse.
+
 ### Features
 
 * **help / browser** — `opencli browser --help -f yaml|json` now emits a structured, agent-ready index of all browser leaf commands (including nested `tab`, `get`, and `dialog` commands), their positionals, command options, namespace options, and root global options. Individual browser commands also support structured help, backed by a shared Commander option/argument spec extractor.
