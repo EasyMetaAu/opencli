@@ -91,7 +91,7 @@ jobs:
 
   # ── Bun compatibility check ──
   bun-test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, docker]
     steps:
       - uses: actions/checkout@v6
 
@@ -112,7 +112,7 @@ jobs:
 
   # Adapter tests are pure unit tests — OS doesn't affect results.
   adapter-test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, docker]
     needs: build
     steps:
       - uses: actions/checkout@v6
