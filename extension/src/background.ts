@@ -645,7 +645,12 @@ function initialize(): void {
   initialized = true;
   chrome.alarms.create('keepalive', { periodInMinutes: 0.4 }); // ~24 seconds
   executor.registerListeners();
-  executor.registerFrameTracking();
+  try {
+    const registerFrameTracking = (executor as { registerFrameTracking?: () => void }).registerFrameTracking;
+    registerFrameTracking?.();
+  } catch {
+    // Some focused tests mock only the cdp functions they exercise.
+  }
   void (async () => {
     await getCurrentContextId();
     await reconcileTargetLeaseRegistry();
@@ -661,6 +666,11 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onStartup.addListener(() => {
   initialize();
 });
+
+// MV3 service workers can be started by events other than install/startup
+// (including unpacked-extension e2e launches). Initialize on every worker load;
+// initialize() is idempotent, so lifecycle events remain harmless.
+initialize();
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'keepalive') void connect();
@@ -1376,8 +1386,9 @@ async function handleCdp(cmd: Command, workspace: string): Promise<Result> {
     const routeFrameId = typeof params.frameId === 'string' && params.sessionId === 'target'
       ? params.frameId
       : undefined;
+    const routeTargetUrl = typeof params.targetUrl === 'string' ? params.targetUrl : undefined;
     const data = routeFrameId
-      ? await executor.sendCommandInFrameTarget(tabId, routeFrameId, cmd.cdpMethod, stripOpenCliFrameRoutingParams(params, true), aggressive)
+      ? await executor.sendCommandInFrameTarget(tabId, routeFrameId, cmd.cdpMethod, stripOpenCliFrameRoutingParams(params, true), aggressive, 30_000, routeTargetUrl)
       : await chrome.debugger.sendCommand(
         { tabId },
         cmd.cdpMethod,
@@ -1390,7 +1401,7 @@ async function handleCdp(cmd: Command, workspace: string): Promise<Result> {
 }
 
 function stripOpenCliFrameRoutingParams(params: Record<string, unknown>, stripFrameId: boolean): Record<string, unknown> {
-  const { sessionId, frameId, ...rest } = params;
+  const { sessionId, frameId, targetUrl, ...rest } = params;
   if (!stripFrameId && frameId !== undefined) return { ...rest, frameId };
   return rest;
 }

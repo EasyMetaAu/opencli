@@ -93,32 +93,17 @@ describe('cdp attach recovery', () => {
     );
   });
 
-  it('falls back to a frame target session when no same-target execution context exists', async () => {
+  it('falls back to a frame target when no same-target execution context exists', async () => {
     const { chrome, debuggerApi, debuggerEventListeners } = createChromeMock();
-    debuggerApi.sendCommand = vi.fn(async (_target: unknown, method: string, params?: any) => {
-      if (method === 'Runtime.evaluate') return { result: { value: 'root-ok' } };
-      if (method === 'Target.attachToTarget') return { sessionId: 'session-1' };
-      if (method === 'Target.sendMessageToTarget') {
-        const message = JSON.parse(String(params.message));
-        queueMicrotask(() => {
-          for (const listener of debuggerEventListeners) {
-            listener(
-              { tabId: 1 },
-              'Target.receivedMessageFromTarget',
-              {
-                sessionId: params.sessionId,
-                message: JSON.stringify({
-                  id: message.id,
-                  result: message.method === 'Runtime.evaluate'
-                    ? { result: { value: 'frame-ok' } }
-                    : {},
-                }),
-              },
-            );
-          }
-        });
-        return {};
+    debuggerApi.sendCommand = vi.fn(async (target: any, method: string, _params?: any) => {
+      if (method === 'Target.setDiscoverTargets') return {};
+      if (method === 'Target.setAutoAttach') return {};
+      if (method === 'Target.getTargets') return { targetInfos: [{ targetId: 'oopif-frame', type: 'iframe', url: 'https://frame.test' }] };
+      if (target?.targetId === 'oopif-frame' && method === 'Runtime.enable') return {};
+      if (target?.targetId === 'oopif-frame' && method === 'Runtime.evaluate') {
+        return { result: { value: 'frame-ok' } };
       }
+      if (method === 'Runtime.evaluate') return { result: { value: 'root-ok' } };
       return {};
     });
     vi.stubGlobal('chrome', chrome);
@@ -129,18 +114,11 @@ describe('cdp attach recovery', () => {
     const result = await mod.evaluateInFrame(1, 'document.title', 'oopif-frame');
 
     expect(result).toBe('frame-ok');
+    expect(debuggerApi.attach).toHaveBeenCalledWith({ targetId: 'oopif-frame' }, '1.3');
     expect(debuggerApi.sendCommand).toHaveBeenCalledWith(
-      { tabId: 1 },
-      'Target.attachToTarget',
-      { targetId: 'oopif-frame', flatten: false },
-    );
-    expect(debuggerApi.sendCommand).toHaveBeenCalledWith(
-      { tabId: 1 },
-      'Target.sendMessageToTarget',
-      expect.objectContaining({
-        sessionId: 'session-1',
-        message: expect.stringContaining('"Runtime.evaluate"'),
-      }),
+      { targetId: 'oopif-frame' },
+      'Runtime.evaluate',
+      expect.any(Object),
     );
   });
 
