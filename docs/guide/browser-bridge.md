@@ -27,22 +27,22 @@ opencli doctor            # Check extension + daemon connectivity
 
 ## Tab Targeting
 
-Browser commands run inside the shared `browser:default` workspace unless you explicitly choose another tab target.
+Browser commands require an explicit `<session>` positional immediately after `browser`. Use the same session name for a multi-step flow, and use different names to isolate parallel work.
 
 ```bash
-opencli browser open https://www.baidu.com/
-opencli browser tab list
-opencli browser tab new https://www.baidu.com/
-opencli browser eval --tab <targetId> 'document.title'
-opencli browser tab select <targetId>
-opencli browser get title
-opencli browser tab close <targetId>
+opencli browser baidu open https://www.baidu.com/
+opencli browser baidu tab list
+opencli browser baidu tab new https://www.baidu.com/
+opencli browser baidu eval --tab <targetId> 'document.title'
+opencli browser baidu tab select <targetId>
+opencli browser baidu get title
+opencli browser baidu tab close <targetId>
 ```
 
 Key rules:
 
-- `opencli browser open <url>` and `opencli browser tab new [url]` return a `targetId`.
-- `opencli browser tab list` prints the `targetId` values of tabs that already exist.
+- `opencli browser <session> open <url>` and `opencli browser <session> tab new [url]` return a `targetId`.
+- `opencli browser <session> tab list` prints the `targetId` values of tabs that already exist.
 - `--tab <targetId>` routes a single browser command to that specific tab.
 - `tab new` creates a new tab but does not change the default browser target.
 - `tab select <targetId>` makes that tab the default target for later untargeted `opencli browser ...` commands.

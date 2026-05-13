@@ -11,6 +11,7 @@ import { resolveTwitterQueryId } from './shared.js';
 const OPERATION_NAME = 'BookmarkFolderTimeline';
 const FALLBACK_QUERY_ID = '13H7EUATwethsj_jZ6QQAQ';
 const FOLDER_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+const MAX_PAGINATION_PAGES = 100;
 
 const FEATURES = {
     rweb_video_screen_enabled: false,
@@ -122,6 +123,7 @@ cli({
     domain: 'x.com',
     strategy: Strategy.COOKIE,
     browser: true,
+    siteSession: 'persistent',
     args: [
         { name: 'folder-id', positional: true, type: 'string', required: true, help: 'Folder id from `opencli twitter bookmark-folders`.' },
         { name: 'limit', type: 'int', default: 20, help: 'Maximum number of bookmarks to return (default 20).' },
@@ -140,11 +142,8 @@ cli({
             throw new ArgumentError(`Invalid --limit: ${JSON.stringify(kwargs.limit)}. Expected a positive integer.`);
         }
 
-        await page.goto('https://x.com');
-        await page.wait(3);
-        const ct0 = await page.evaluate(`() => {
-            return document.cookie.split(';').map(c => c.trim()).find(c => c.startsWith('ct0='))?.split('=')[1] || null;
-        }`);
+        const cookies = await page.getCookies({ url: 'https://x.com' });
+        const ct0 = cookies.find((c) => c.name === 'ct0')?.value || null;
         if (!ct0)
             throw new AuthRequiredError('x.com', 'Not logged into x.com (no ct0 cookie)');
 
@@ -160,7 +159,8 @@ cli({
         const allTweets = [];
         const seen = new Set();
         let cursor = null;
-        for (let i = 0; i < 5 && allTweets.length < limit; i++) {
+        // Runaway guard only; --limit and cursor exhaustion control normal pagination.
+        for (let i = 0; i < MAX_PAGINATION_PAGES && allTweets.length < limit; i++) {
             const fetchCount = Math.min(100, limit - allTweets.length + 10);
             const apiUrl = buildFolderTimelineUrl(queryId, folderId, fetchCount, cursor);
             const data = await page.evaluate(`async () => {

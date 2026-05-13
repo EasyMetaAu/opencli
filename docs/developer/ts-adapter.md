@@ -28,14 +28,12 @@ cli({
     // Navigate and extract data
     await page.goto('https://www.mysite.com');
 
-    const data = await page.evaluate(`
-      (async () => {
-        const res = await fetch('/api/search?q=${encodeURIComponent(String(query))}', {
-          credentials: 'include'
-        });
-        return (await res.json()).results;
-      })()
-    `);
+    const data = await page.evaluate(async (q: string) => {
+      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, {
+        credentials: 'include',
+      });
+      return (await res.json()).results;
+    }, String(query));
 
     if (!Array.isArray(data)) throw new CommandExecutionError('MySite returned an unexpected response');
     if (!data.length) throw new EmptyResultError('mysite search', 'Try a different keyword');
@@ -89,28 +87,31 @@ for context, the full pattern table, and how to add an id to a listing.
 
 Browser-backed commands are one-shot by default: each execution gets a fresh
 tab lease and releases it when the command returns. For interactive sites where
-successive commands should continue in the same page, opt into site-level reuse:
+successive commands should continue in the same page, opt into a persistent site
+session:
 
 ```typescript
 cli({
   site: 'mysite',
   name: 'ask',
   strategy: Strategy.COOKIE,
-  browserSession: { reuse: 'site' },
+  siteSession: 'persistent',
   // ...
 });
 ```
 
-`reuse: 'site'` makes commands for the same site share `site:<site>` and use the
-interactive idle timeout. Users can override the adapter default with
-`--reuse none` or force reuse with `--reuse site`.
+`siteSession: 'persistent'` makes commands for the same site share a stable
+adapter site tab and keeps that tab open until it is explicitly closed. Users
+can override the adapter default with `--site-session ephemeral` or force
+persistence with `--site-session persistent`.
 
 ## The `page` Object
 
 The `page` parameter provides browser interaction methods:
 
 - `page.goto(url)` — Navigate to a URL
-- `page.evaluate(script)` — Execute JavaScript in the page context
+- `page.evaluate(fn, ...args)` — Execute a serializable function in the page context. Pass Node-side values through JSON-serializable args; the function cannot close over local variables.
+- `page.evaluate(script)` — Execute a raw JavaScript string in the page context. Prefer function form for new adapter code.
 - `page.waitForSelector(selector)` — Wait for an element
 - `page.click(selector)` — Click an element
 - `page.type(selector, text)` — Type text into an input

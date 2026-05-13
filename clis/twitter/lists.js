@@ -92,20 +92,20 @@ export const command = cli({
     domain: 'x.com',
     strategy: Strategy.COOKIE,
     browser: true,
+    siteSession: 'persistent',
     args: [
         { name: 'limit', type: 'int', default: 50, help: 'Maximum number of lists to return (default 50).' },
     ],
     columns: ['id', 'name', 'members', 'followers', 'mode'],
     func: async (page, kwargs) => {
         const limit = kwargs.limit || 50;
-        await page.goto('https://x.com');
-        await page.wait(3);
-        const ct0 = await page.evaluate(`() => {
-            return document.cookie.split(';').map(c => c.trim()).find(c => c.startsWith('ct0='))?.split('=')[1] || null;
-        }`);
+        const cookies = await page.getCookies({ url: 'https://x.com' });
+        const ct0 = cookies.find((c) => c.name === 'ct0')?.value || null;
         if (!ct0)
             throw new AuthRequiredError('x.com', 'Not logged into x.com (no ct0 cookie)');
-        const queryId = await page.evaluate(`async () => {
+        // opencli >=1.7.x wraps primitive page.evaluate returns as { session, data: <value> }.
+        const unwrap = (v) => (v && typeof v === 'object' && 'session' in v && 'data' in v ? v.data : v);
+        const queryIdRaw = await page.evaluate(`async () => {
             try {
                 const ghResp = await fetch('https://raw.githubusercontent.com/fa0311/twitter-openapi/refs/heads/main/src/config/placeholder.json');
                 if (ghResp.ok) {
@@ -128,7 +128,8 @@ export const command = cli({
                 }
             } catch {}
             return null;
-        }`) || LISTS_QUERY_ID;
+        }`);
+        const queryId = unwrap(queryIdRaw) || LISTS_QUERY_ID;
         const headers = JSON.stringify({
             'Authorization': `Bearer ${decodeURIComponent(TWITTER_BEARER_TOKEN)}`,
             'X-Csrf-Token': ct0,
