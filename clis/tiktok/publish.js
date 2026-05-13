@@ -55,7 +55,7 @@ async function assertTikTokLoggedIn(page) {
             if (/\/login/i.test(url) || (loginLike && !uploadLike)) {
                 return { ok: false, message: 'TikTok Studio requires login' };
             }
-            return { ok: true, hasFileInput, url };
+            return { ok: true, url };
         })()
     `);
     if (!state?.ok) {
