@@ -56,7 +56,39 @@ class ActionPage extends BasePage {
   async selectTab(): Promise<void> {}
 }
 
+class EvalWithArgsPage extends BasePage {
+  scripts: string[] = [];
+
+  async goto(): Promise<void> {}
+  async evaluate<T = unknown>(js: string): Promise<T>;
+  async evaluate<Args extends unknown[], T>(fn: BrowserEvaluateFunction<Args, T>, ...args: Args): Promise<Awaited<T>>;
+  async evaluate(input: string | BrowserEvaluateFunction<unknown[], unknown>): Promise<unknown> {
+    const script = typeof input === 'string' ? input : input.toString();
+    this.scripts.push(script);
+    return (0, eval)(script);
+  }
+  async getCookies(): Promise<[]> { return []; }
+  async screenshot(): Promise<string> { return ''; }
+  async tabs(): Promise<unknown[]> { return []; }
+  async selectTab(): Promise<void> {}
+}
+
 const resolveOk = { ok: true, matches_n: 1, match_level: 'exact' };
+describe('BasePage.evaluateWithArgs', () => {
+  it('scopes injected const arguments per evaluation call', async () => {
+    const page = new EvalWithArgsPage();
+
+    await expect(page.evaluateWithArgs(`(() => value)()`, { value: 'first' })).resolves.toBe('first');
+    await expect(page.evaluateWithArgs(`(() => value)()`, { value: 'second' })).resolves.toBe('second');
+    expect(page.scripts.every((script) => script.includes('return await'))).toBe(true);
+  });
+
+  it('rejects invalid injected argument names', async () => {
+    const page = new EvalWithArgsPage();
+    await expect(page.evaluateWithArgs(`(() => true)()`, { 'bad-name': true })).rejects.toThrow('invalid key');
+  });
+});
+
 
 describe('BasePage.fetchJson', () => {
   it('passes a narrow browser-context JSON request and parses the response in Node', async () => {

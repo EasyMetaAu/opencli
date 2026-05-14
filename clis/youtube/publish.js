@@ -173,7 +173,7 @@ async function clickAndVerifyYouTubeRadio(page, labels, settingName, { required 
     const result = await page.evaluateWithArgs(`
         (() => {
             ${visibleElementScript()}
-            const wanted = labels.map((label) => String(label).toLowerCase());
+            const wanted = radioLabels.map((label) => String(label).toLowerCase());
             const candidates = Array.from(document.querySelectorAll('tp-yt-paper-radio-button, ytcp-radio-button, [role="radio"], label'));
             function isChecked(el) {
                 return el.checked === true
@@ -193,7 +193,7 @@ async function clickAndVerifyYouTubeRadio(page, labels, settingName, { required 
             }
             return { ok: false, message: settingName + ' radio was not found' };
         })()
-    `, { labels, settingName });
+    `, { radioLabels: labels, settingName });
     if (!result?.ok) {
         if (!required && /radio was not found/i.test(result?.message || '')) {
             return { ok: false, skipped: true, message: result?.message || `YouTube ${settingName} radio was not found` };
@@ -204,7 +204,7 @@ async function clickAndVerifyYouTubeRadio(page, labels, settingName, { required 
     await page.wait({ time: 0.3 });
     const verified = await page.evaluateWithArgs(`
         (() => {
-            const wanted = labels.map((label) => String(label).toLowerCase());
+            const wanted = radioLabels.map((label) => String(label).toLowerCase());
             const candidates = Array.from(document.querySelectorAll('tp-yt-paper-radio-button, ytcp-radio-button, [role="radio"], label'));
             function radioSelected(el) {
                 const nodes = [el, el.closest?.('[role="radio"]'), el.querySelector?.('[role="radio"]'), el.querySelector?.('input[type="radio"]')].filter(Boolean);
@@ -224,7 +224,7 @@ async function clickAndVerifyYouTubeRadio(page, labels, settingName, { required 
             }
             return { ok: false, message: settingName + ' radio selection could not be confirmed after click' };
         })()
-    `, { labels, settingName });
+    `, { radioLabels: labels, settingName });
     if (!verified?.ok) {
         throwPublishFailure(PUBLISH_ERROR_CODES.platformError, verified?.message || `YouTube ${settingName} radio selection could not be confirmed`);
     }
@@ -264,12 +264,12 @@ async function goThroughChecks(page, privacy) {
         await page.wait({ time: 1.2 });
     }
 
-    const labels = privacy === 'private'
+    const privacyLabels = privacy === 'private'
         ? ['Private', '私享', '私密']
         : privacy === 'unlisted'
             ? ['Unlisted', '不公开列出']
             : ['Public', '公开'];
-    await clickAndVerifyYouTubeRadio(page, labels, 'privacy');
+    await clickAndVerifyYouTubeRadio(page, privacyLabels, 'privacy');
 }
 
 async function clickPublish(page) {

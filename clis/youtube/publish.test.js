@@ -12,6 +12,13 @@ function tempVideo() {
     fs.writeFileSync(file, 'fake video');
     return file;
 }
+function assertEvaluateScriptParses(script, args) {
+    const declarations = Object.entries(args)
+        .map(([key, value]) => `const ${key} = ${JSON.stringify(value)};`)
+        .join('\n');
+    expect(() => new Function(`${declarations}\n${script}`)).not.toThrow();
+}
+
 
 function pageReturning(result) {
     return {
@@ -54,7 +61,8 @@ describe('youtube publish adapter', () => {
                 calls.push(script);
                 return { ok: false };
             },
-            async evaluateWithArgs() {
+            async evaluateWithArgs(script, args) {
+                assertEvaluateScriptParses(script, args);
                 return evaluateWithArgsResults.shift();
             },
             async wait() {},
