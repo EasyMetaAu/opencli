@@ -169,7 +169,7 @@ export function classifyYouTubePublishState({ text = '', anchors = [], privacy =
     return { ok: true, url: anchors[0] || '', message: 'YouTube publish completed' };
 }
 
-async function clickAndVerifyYouTubeRadio(page, labels, settingName) {
+async function clickAndVerifyYouTubeRadio(page, labels, settingName, { required = true } = {}) {
     const result = await page.evaluateWithArgs(`
         (() => {
             ${visibleElementScript()}
@@ -195,6 +195,9 @@ async function clickAndVerifyYouTubeRadio(page, labels, settingName) {
         })()
     `, { labels, settingName });
     if (!result?.ok) {
+        if (!required && /radio was not found/i.test(result?.message || '')) {
+            return { ok: false, skipped: true, message: result?.message || `YouTube ${settingName} radio was not found` };
+        }
         throwPublishFailure(PUBLISH_ERROR_CODES.platformError, result?.message || `YouTube ${settingName} radio was not found`);
     }
 
@@ -232,7 +235,19 @@ async function chooseNotMadeForKids(page, madeForKids) {
     const labels = madeForKids
         ? ['Yes, it\'s made for kids', '是，为儿童打造']
         : ['No, it\'s not made for kids', '不是，不是为儿童打造', 'No, it is not made for kids'];
-    await clickAndVerifyYouTubeRadio(page, labels, 'made-for-kids');
+    const selected = await clickAndVerifyYouTubeRadio(page, labels, 'made-for-kids', { required: false });
+    if (selected?.ok) return selected;
+
+    // YouTube's Shorts upload flow can omit the audience radio entirely. Try expanded sections
+    // for normal videos, then continue so publish can reach the required privacy step.
+    await page.evaluate(`
+        (() => {
+            ${visibleElementScript()}
+            return clickByLabels(['Show more', 'More options', '显示更多', '展开更多', '更多选项']);
+        })()
+    `);
+    await page.wait({ time: 0.3 });
+    return clickAndVerifyYouTubeRadio(page, labels, 'made-for-kids', { required: false });
 }
 
 async function goThroughChecks(page, privacy) {
@@ -340,6 +355,9 @@ export const publishCommand = cli({
 export const __test__ = {
     unsupportedForInput,
     fillYouTubeDetails,
+    chooseNotMadeForKids,
+    goThroughChecks,
+    clickAndVerifyYouTubeRadio,
     classifyYouTubePublishState,
     waitForYouTubePublishResult,
 };
