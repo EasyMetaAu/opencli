@@ -26,16 +26,16 @@ export async function browserFetch(page, method, url, options = {}) {
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        throw new CommandExecutionError(`Douyin API request failed: ${message}`);
+        throw new CommandExecutionError(`Douyin API request failed (${method} ${url}): ${message}`);
     }
     if (result === null || result === undefined) {
-        throw new CommandExecutionError('Empty response from Douyin API');
+        throw new CommandExecutionError(`Empty response from Douyin API (${method} ${url})`);
     }
     if (result && typeof result === 'object' && 'status_code' in result) {
         const code = result.status_code;
         if (code !== 0) {
             const msg = result.status_msg ?? 'unknown error';
-            throw new CommandExecutionError(`Douyin API error ${code}: ${msg}`);
+            throw new CommandExecutionError(`Douyin API error ${code} at ${method} ${url}: ${msg}`);
         }
     }
     return result;

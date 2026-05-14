@@ -2,7 +2,7 @@
  * Douyin publish — 8-phase pipeline for scheduling video posts.
  *
  * Phases:
- *   1. STS2 credentials
+ *   1. upload auth v5 credentials
  *   2. Apply TOS upload URL
  *   3. TOS multipart upload
  *   4. Cover upload (optional, via ImageX)
@@ -15,10 +15,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { ArgumentError, CommandExecutionError } from '@jackwener/opencli/errors';
-import { getSts2Credentials } from './_shared/sts2.js';
+import { getUploadAuthV5Credentials, applyVideoUploadInner, commitVideoUploadInner } from './_shared/vod-upload.js';
 import { tosUpload } from './_shared/tos-upload.js';
 import { imagexUpload } from './_shared/imagex-upload.js';
-import { pollTranscode } from './_shared/transcode.js';
 import { browserFetch } from './_shared/browser-fetch.js';
 import { generateCreationId } from './_shared/creation-id.js';
 import { validateTiming, toUnixSeconds } from './_shared/timing.js';
@@ -106,19 +105,13 @@ cli({
                 throw new ArgumentError(`封面文件不存在: ${path.resolve(coverPath)}`);
             }
         }
-        // ── Phase 1: STS2 credentials ───────────────────────────────────────
-        const credentials = await getSts2Credentials(page);
+        // ── Phase 1: upload credentials ────────────────────────────────────
+        const credentials = await getUploadAuthV5Credentials(page);
         // ── Phase 2: Apply TOS upload URL ───────────────────────────────────
-        const vodUrl = `https://vod.bytedanceapi.com/?Action=ApplyVideoUpload&ServiceId=1128&Version=2021-01-01&FileType=video&FileSize=${fileSize}`;
-        const vodJs = `fetch(${JSON.stringify(vodUrl)}, { credentials: 'include' }).then(r => r.json())`;
-        const vodRes = (await page.evaluate(vodJs));
-        const { VideoId: videoId, UploadHosts, StoreInfos } = vodRes.Result.UploadAddress;
-        const tosUrl = `https://${UploadHosts[0]}/${StoreInfos[0].StoreUri}`;
-        const tosUploadInfo = {
-            tos_upload_url: tosUrl,
-            auth: StoreInfos[0].Auth,
-            video_id: videoId,
-        };
+        const tosUploadInfo = await applyVideoUploadInner(fileSize, credentials);
+        let coverUri = '';
+        let coverWidth = 720;
+        let coverHeight = 1280;
         // ── Phase 3: TOS upload ─────────────────────────────────────────────
         await tosUpload({
             filePath: videoPath,
@@ -130,10 +123,16 @@ cli({
             },
         });
         process.stderr.write('\n');
+        process.stderr.write('  提交上传...\n');
+        const committedVideo = await commitVideoUploadInner(tosUploadInfo, credentials);
+        const videoId = committedVideo.video_id;
+        process.stderr.write(`  上传已提交: ${videoId}\n`);
+        coverWidth = committedVideo.width || coverWidth;
+        coverHeight = committedVideo.height || coverHeight;
+        if (!coverUri && committedVideo.poster_uri) {
+            coverUri = committedVideo.poster_uri;
+        }
         // ── Phase 4: Cover upload (optional) ────────────────────────────────
-        let coverUri = '';
-        let coverWidth = 720;
-        let coverHeight = 1280;
         if (kwargs.cover) {
             const resolvedCoverPath = path.resolve(kwargs.cover);
             // 4A: Apply ImageX upload
@@ -161,16 +160,9 @@ cli({
             await page.evaluate(commitJs);
             coverUri = coverStoreUri;
         }
-        // ── Phase 5: Enable video ───────────────────────────────────────────
-        const enableUrl = `https://creator.douyin.com/web/api/media/video/enable/?video_id=${videoId}&aid=1128`;
-        await browserFetch(page, 'GET', enableUrl);
-        // ── Phase 6: Poll transcode ─────────────────────────────────────────
-        const transResult = await pollTranscode(page, videoId);
-        coverWidth = transResult.width;
-        coverHeight = transResult.height;
-        if (!coverUri) {
-            coverUri = transResult.poster_uri;
-        }
+        // The gateway upload flow returns a committed VOD upload result; the legacy
+        // enable/transend endpoints can hang for that flow, so create_v2 consumes
+        // the committed video_id and poster metadata directly.
         // ── Phase 7: Content safety check ───────────────────────────────────
         if (!kwargs.no_safety_check) {
             const safetyUrl = 'https://creator.douyin.com/aweme/v1/post_assistant/fast_detect/pre_check';
@@ -266,12 +258,13 @@ cli({
             },
         };
         const publishUrl = `https://creator.douyin.com/web/api/media/aweme/create_v2/?read_aid=2906&${DEVICE_PARAMS}`;
+        process.stderr.write('  创建定时发布...\n');
         const publishRes = (await browserFetch(page, 'POST', publishUrl, {
             body: publishBody,
         }));
-        const awemeId = publishRes.aweme_id;
+        const awemeId = publishRes.aweme_id ?? publishRes.item_id;
         if (!awemeId) {
-            throw new CommandExecutionError(`发布成功但未返回 aweme_id: ${JSON.stringify(publishRes)}`);
+            throw new CommandExecutionError(`发布成功但未返回 aweme_id/item_id: ${JSON.stringify(publishRes)}`);
         }
         const url = `https://www.douyin.com/video/${awemeId}`;
         const publishTimeStr = new Date(timingTs * 1000).toLocaleString('zh-CN', {
