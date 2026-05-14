@@ -5,6 +5,7 @@ import { TWITTER_BEARER_TOKEN, applyTopByEngagement } from './utils.js';
 // ── Twitter GraphQL constants ──────────────────────────────────────────
 const HOME_TIMELINE_QUERY_ID = 'c-CzHF1LboFilMpsx4ZCrQ';
 const HOME_LATEST_TIMELINE_QUERY_ID = 'BKB7oi212Fi7kQtCBGE4zA';
+const MAX_PAGINATION_PAGES = 100;
 // Endpoint config: for-you uses GET HomeTimeline, following uses POST HomeLatestTimeline
 const TIMELINE_ENDPOINTS = {
     'for-you': { endpoint: 'HomeTimeline', method: 'GET', fallbackQueryId: HOME_TIMELINE_QUERY_ID },
@@ -141,6 +142,7 @@ cli({
     domain: 'x.com',
     strategy: Strategy.COOKIE,
     browser: true,
+    siteSession: 'persistent',
     args: [
         {
             name: 'type',
@@ -156,13 +158,10 @@ cli({
         const limit = kwargs.limit || 20;
         const timelineType = kwargs.type === 'following' ? 'following' : 'for-you';
         const { endpoint, method, fallbackQueryId } = TIMELINE_ENDPOINTS[timelineType];
-        // Navigate to x.com for cookie context
-        await page.goto('https://x.com');
-        await page.wait(3);
-        // Extract CSRF token
-        const ct0 = await page.evaluate(`() => {
-      return document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('ct0='))?.split('=')[1] || null;
-    }`);
+        // Cookie context auto-established by framework pre-nav (Strategy.COOKIE + domain).
+        // Read CSRF token directly from the cookie store via CDP — zero page.evaluate round-trip.
+        const cookies = await page.getCookies({ url: 'https://x.com' });
+        const ct0 = cookies.find((c) => c.name === 'ct0')?.value || null;
         if (!ct0)
             throw new AuthRequiredError('x.com', 'Not logged into x.com (no ct0 cookie)');
         // Dynamically resolve queryId for the selected endpoint
@@ -178,7 +177,8 @@ cli({
         const allTweets = [];
         const seen = new Set();
         let cursor = null;
-        for (let i = 0; i < 5 && allTweets.length < limit; i++) {
+        // Runaway guard only; --limit and cursor exhaustion control normal pagination.
+        for (let i = 0; i < MAX_PAGINATION_PAGES && allTweets.length < limit; i++) {
             const fetchCount = Math.min(40, limit - allTweets.length + 5); // over-fetch slightly for promoted filtering
             const variables = buildTimelineVariables(timelineType, fetchCount, cursor);
             const apiUrl = buildHomeTimelineUrl(queryId, endpoint, variables);

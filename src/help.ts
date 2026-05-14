@@ -54,6 +54,27 @@ const COMMON_OPTIONS = [
   },
 ] as const;
 
+const BROWSER_COMMON_OPTIONS = [
+  {
+    flags: '--window <mode>',
+    name: 'window',
+    help: 'Browser window mode: foreground or background',
+    choices: ['foreground', 'background'],
+  },
+  {
+    flags: '--site-session <mode>',
+    name: 'site-session',
+    help: 'Adapter site session lifecycle: ephemeral or persistent',
+    choices: ['ephemeral', 'persistent'],
+  },
+  {
+    flags: '--keep-tab <bool>',
+    name: 'keep-tab',
+    help: 'Keep the browser tab lease after the command finishes',
+    choices: ['true', 'false'],
+  },
+] as const;
+
 function normalizeStructuredHelpFormat(value: string | undefined): StructuredHelpFormat | undefined {
   const normalized = value?.toLowerCase();
   if (normalized === 'yaml' || normalized === 'yml') return 'yaml';
@@ -168,7 +189,7 @@ function compactArg(arg: Arg): Record<string, unknown> {
   };
 }
 
-function compactCommonOption(option: typeof COMMON_OPTIONS[number]): Record<string, unknown> {
+function compactCommonOption(option: typeof COMMON_OPTIONS[number] | typeof BROWSER_COMMON_OPTIONS[number]): Record<string, unknown> {
   return {
     name: option.name,
     flags: option.flags,
@@ -210,12 +231,42 @@ function compactCommanderOptions(options: readonly CommanderOption[]): OptionSpe
     .filter((option): option is OptionSpec => option !== null);
 }
 
+/**
+ * Extracts a positional placeholder that should appear immediately after this
+ * command's name in user-facing path strings. Reads the leading positional
+ * (e.g. `<session>`) from a `.usage()` override; commands without a positional
+ * override return `null` so the path stays as-is.
+ *
+ * Example: `browser` declares `.usage('<session> <command> [options]')`,
+ * so `commanderPath(browserClickCmd)` becomes
+ * `['opencli', 'browser', '<session>', 'click']`.
+ */
+export function leadingPositionalFromUsage(command: Command): string | null {
+  const usage = (command as Command & { _usage?: string })._usage;
+  if (!usage) return null;
+  const match = usage.match(/^\s*(<[^>]+>)/);
+  return match ? match[1] : null;
+}
+
 function commanderPath(command: Command): string[] {
   const parts: string[] = [];
   let current: Command | null = command;
   while (current) {
     const name = current.name();
-    if (name) parts.push(name);
+    if (name) {
+      parts.push(name);
+      // If this command declares a leading-positional usage override AND we
+      // have already collected a child name below it, the positional must
+      // appear between this command and the child (i.e. before the names
+      // already collected). parts is in reverse order, so push to the end.
+      const positional = leadingPositionalFromUsage(current);
+      if (positional && parts.length > 1) {
+        // We collected child names first (reverse order). Move them up by one
+        // and put the positional at index `parts.length - 2` so reverse()
+        // places it between this command and the first child name.
+        parts.splice(parts.length - 1, 0, positional);
+      }
+    }
     current = current.parent;
   }
   return parts.reverse();
@@ -224,7 +275,10 @@ function commanderPath(command: Command): string[] {
 function commandPathFromRoot(namespaceRoot: Command, command: Command): string[] {
   const rootPath = commanderPath(namespaceRoot);
   const commandPath = commanderPath(command);
-  return commandPath.slice(rootPath.length);
+  // Strip placeholder positional segments (e.g. `<session>`) from the relative
+  // name so agents can still address subcommands by their leaf name. Display
+  // paths in `command` / `usage` still include the placeholders.
+  return commandPath.slice(rootPath.length).filter(part => !/^<.+>$/.test(part));
 }
 
 function collectLeafCommands(command: Command): Command[] {
@@ -282,10 +336,19 @@ export function commanderNamespaceHelpData(
   const leaves = collectLeafCommands(namespaceRoot)
     .filter(command => command !== namespaceRoot)
     .sort((a, b) => commandPathFromRoot(namespaceRoot, a).join(' ').localeCompare(commandPathFromRoot(namespaceRoot, b).join(' ')));
+  // Respect commander's `.usage()` override (e.g. `<session> <command> [options]`
+  // on `browser`); fall back to the generic `<command> [args] [options]` form.
+  // Read the private `_usage` field directly because `.usage()` returns the
+  // auto-generated form if no override was set.
+  const commandPath = commanderPath(namespaceRoot).join(' ');
+  const usageOverride = (namespaceRoot as Command & { _usage?: string })._usage;
+  const usage = usageOverride
+    ? `${commandPath} ${usageOverride}`
+    : `${commandPath} <command> [args] [options]`;
   return {
     namespace: namespaceRoot.name(),
-    command: commanderPath(namespaceRoot).join(' '),
-    usage: `${commanderPath(namespaceRoot).join(' ')} <command> [args] [options]`,
+    command: commandPath,
+    usage,
     description: opts.description ?? namespaceRoot.description(),
     command_count: leaves.length,
     commands: leaves.map(command => compactCommanderCommand(namespaceRoot, command, opts)),
@@ -293,7 +356,7 @@ export function commanderNamespaceHelpData(
     ...(opts.globalCommand ? { global_options: compactCommanderOptions(opts.globalCommand.options) } : {}),
     structured_help: {
       formats: ['yaml', 'json'],
-      usage: `${commanderPath(namespaceRoot).join(' ')} --help -f yaml`,
+      usage: `${commandPath} --help -f yaml`,
     },
   };
 }
@@ -396,8 +459,9 @@ function compactCommand(cmd: CliCommand): Record<string, unknown> {
     ...(cmd.aliases?.length ? { aliases: cmd.aliases } : {}),
     positionals: positionals(cmd).map(compactArg),
     command_options: commandOptions(cmd).map(compactArg),
+    ...(cmd.browser ? { browser_common_options: BROWSER_COMMON_OPTIONS.map(compactCommonOption) } : {}),
     example: formatCommandExample(cmd),
-    ...(cmd.browserSession ? { browserSession: cmd.browserSession } : {}),
+    ...(cmd.siteSession ? { siteSession: cmd.siteSession } : {}),
     ...(cmd.defaultFormat ? { defaultFormat: cmd.defaultFormat } : {}),
     ...(cmd.columns?.length ? { columns: cmd.columns } : {}),
   };
@@ -445,6 +509,7 @@ export function siteHelpData(site: string, commands: readonly CliCommand[]): Rec
     command_count: unique.length,
     commands: unique.map(cmd => compactCommand(cmd)),
     common_options: COMMON_OPTIONS.map(compactCommonOption),
+    ...(unique.some(cmd => cmd.browser) ? { browser_common_options: BROWSER_COMMON_OPTIONS.map(compactCommonOption) } : {}),
     next: [
       `opencli ${site} <command> --help -f yaml`,
       `opencli ${site} <command> -f yaml`,
@@ -457,6 +522,7 @@ export function commandHelpData(cmd: CliCommand): Record<string, unknown> {
     site: cmd.site,
     ...compactCommand(cmd),
     common_options: COMMON_OPTIONS.map(compactCommonOption),
+    ...(cmd.browser ? { browser_common_options: BROWSER_COMMON_OPTIONS.map(compactCommonOption) } : {}),
     output_formats: ['table', 'plain', 'yaml', 'json', 'md', 'csv'],
   };
 }
@@ -485,6 +551,15 @@ export function formatCommonOptionsHelpText(): string {
   return ['Common options:', ...formatRows(rows)].join('\n');
 }
 
+export function formatBrowserCommonOptionsHelpText(): string {
+  const rows = BROWSER_COMMON_OPTIONS.map(option => {
+    const details: string[] = [option.help];
+    if ('choices' in option) details.push(`choices: ${option.choices.join(', ')}`);
+    return [option.flags, details.join('  ')] as [string, string];
+  });
+  return ['Browser common options:', ...formatRows(rows)].join('\n');
+}
+
 export function formatSiteHelpText(site: string, commands: readonly CliCommand[]): string {
   const unique = [...new Map(commands.map(cmd => [fullName(cmd), cmd])).values()]
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -497,6 +572,7 @@ export function formatSiteHelpText(site: string, commands: readonly CliCommand[]
     ...formatRows(unique.map(cmd => [formatCommandListTerm(cmd), formatSiteCommandDescription(cmd)])),
     '',
     formatCommonOptionsHelpText(),
+    ...(unique.some(cmd => cmd.browser) ? ['', formatBrowserCommonOptionsHelpText()] : []),
     '',
     `Agent tip: use 'opencli ${site} --help -f yaml' to get all command args/options in one structured response.`,
     '',
@@ -529,6 +605,7 @@ export function formatCommandHelpText(cmd: CliCommand): string {
   }
 
   lines.push(formatCommonOptionsHelpText(), '');
+  if (cmd.browser) lines.push(formatBrowserCommonOptionsHelpText(), '');
 
   const meta: string[] = [];
   meta.push(`Access: ${cmd.access}`);
