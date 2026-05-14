@@ -11,7 +11,7 @@ concurrency:
 jobs:
   # ── Adapter doc coverage ──
   doc-coverage:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, docker]
     steps:
       - uses: actions/checkout@v6
 
@@ -20,7 +20,7 @@ jobs:
 
   # ── VitePress build validation ──
   docs-build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, docker]
     steps:
       - uses: actions/checkout@v6
 

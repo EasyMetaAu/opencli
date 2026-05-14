@@ -91,7 +91,7 @@ jobs:
 
   # ── Bun compatibility check ──
   bun-test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, docker]
     steps:
       - uses: actions/checkout@v6
 
@@ -116,7 +116,7 @@ jobs:
   # dispatch still guard the merged state.
   adapter-test:
     if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, docker]
     needs: build
     steps:
       - uses: actions/checkout@v6

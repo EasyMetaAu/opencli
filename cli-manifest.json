@@ -22214,6 +22214,98 @@
   },
   {
     "site": "tiktok",
+    "name": "publish",
+    "description": "Publish a local video to TikTok Studio and return a structured result",
+    "access": "write",
+    "domain": "www.tiktok.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "video",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Local video file path (mp4/mov/m4v/webm)"
+      },
+      {
+        "name": "title",
+        "type": "str",
+        "required": true,
+        "help": "Video title/caption prefix"
+      },
+      {
+        "name": "description",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "Video description appended after title"
+      },
+      {
+        "name": "tags",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "Comma-separated hashtags; written into the caption as #tags"
+      },
+      {
+        "name": "cover",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "Cover image path (currently returns unsupported_capability)"
+      },
+      {
+        "name": "schedule",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "Scheduled publish time (currently returns unsupported_capability)"
+      },
+      {
+        "name": "privacy",
+        "type": "str",
+        "default": "public",
+        "required": false,
+        "help": "Privacy setting; currently only public is automated",
+        "choices": [
+          "public",
+          "friends",
+          "private"
+        ]
+      },
+      {
+        "name": "account",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "Account selector (currently returns unsupported_capability)"
+      },
+      {
+        "name": "draft",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Save as draft (currently returns unsupported_capability)"
+      }
+    ],
+    "columns": [
+      "ok",
+      "platform",
+      "status",
+      "code",
+      "capability",
+      "message",
+      "url",
+      "draft"
+    ],
+    "type": "js",
+    "modulePath": "tiktok/publish.js",
+    "sourceFile": "tiktok/publish.js",
+    "navigateBefore": "https://www.tiktok.com/tiktokstudio/upload"
+  },
+  {
+    "site": "tiktok",
     "name": "save",
     "description": "Add a TikTok video to Favorites",
     "access": "write",
@@ -27521,7 +27613,7 @@
         "type": "str",
         "required": true,
         "positional": true,
-        "help": "Channel ID (UCxxxx) or handle (@name)"
+        "help": "Channel ID (UCxxxx), handle (@name), or channel URL"
       },
       {
         "name": "limit",
@@ -27529,6 +27621,13 @@
         "default": 10,
         "required": false,
         "help": "Max recent videos (max 30)"
+      },
+      {
+        "name": "tab",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "Channel tab to list: videos or shorts"
       }
     ],
     "columns": [
@@ -27702,6 +27801,98 @@
     "modulePath": "youtube/playlist.js",
     "sourceFile": "youtube/playlist.js",
     "navigateBefore": "https://www.youtube.com"
+  },
+  {
+    "site": "youtube",
+    "name": "publish",
+    "description": "Upload and publish a local video to YouTube Studio and return a structured result",
+    "access": "write",
+    "domain": "studio.youtube.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "video",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Local video file path (mp4/mov/m4v/webm)"
+      },
+      {
+        "name": "title",
+        "type": "str",
+        "required": true,
+        "help": "Video title"
+      },
+      {
+        "name": "description",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "Video description"
+      },
+      {
+        "name": "tags",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "Comma-separated tags; written as hashtags in the description"
+      },
+      {
+        "name": "cover",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "Thumbnail image path (currently returns unsupported_capability)"
+      },
+      {
+        "name": "schedule",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "Scheduled publish time (currently returns unsupported_capability)"
+      },
+      {
+        "name": "privacy",
+        "type": "str",
+        "default": "public",
+        "required": false,
+        "help": "YouTube visibility",
+        "choices": [
+          "public",
+          "unlisted",
+          "private"
+        ]
+      },
+      {
+        "name": "account",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "Channel/account selector (currently returns unsupported_capability)"
+      },
+      {
+        "name": "draft",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Save as draft (currently returns unsupported_capability)"
+      }
+    ],
+    "columns": [
+      "ok",
+      "platform",
+      "status",
+      "code",
+      "capability",
+      "message",
+      "url",
+      "draft"
+    ],
+    "type": "js",
+    "modulePath": "youtube/publish.js",
+    "sourceFile": "youtube/publish.js",
+    "navigateBefore": "https://studio.youtube.com"
   },
   {
     "site": "youtube",

@@ -72,8 +72,32 @@ function buildUserScript(username, limit) {
 
   function addVideo(dedup, item, source) {
     const row = normalizeVideoItem(item, dedup.size + 1);
-    if (!row || dedup.has(row.id)) return;
-    dedup.set(row.id, { ...row, source });
+    if (!row) return;
+    const existing = dedup.get(row.id);
+    if (!existing) {
+      dedup.set(row.id, { ...row, source });
+      return;
+    }
+    const incomingIsHigherAuthority = existing.source === 'bootstrap' && (source === 'profile-api' || source === 'search-fallback');
+    if (!incomingIsHigherAuthority || rowQualityScore(row) <= rowQualityScore(existing)) return;
+    dedup.set(row.id, { ...mergeVideoRows(existing, row), source });
+  }
+
+  function hasValue(value) {
+    return value !== null && value !== undefined && value !== '';
+  }
+
+  function rowQualityScore(row) {
+    const fields = ['author', 'url', 'cover', 'title', 'desc', 'plays', 'likes', 'comments', 'shares', 'createTime'];
+    return fields.reduce((score, field) => score + (hasValue(row[field]) ? 1 : 0), 0);
+  }
+
+  function mergeVideoRows(existing, incoming) {
+    const merged = { ...existing };
+    for (const [key, value] of Object.entries(incoming)) {
+      if (hasValue(value)) merged[key] = value;
+    }
+    return merged;
   }
 
   const universal = findUniversalData();
