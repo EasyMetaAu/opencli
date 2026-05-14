@@ -43,6 +43,31 @@ describe('youtube publish adapter', () => {
         await expect(publishCommand.func({}, { video, title: 'x', account: 'brand' })).resolves.toMatchObject([{ code: 'unsupported_capability', capability: 'account' }]);
     });
 
+    it('does not fail Shorts-style upload flow when made-for-kids radio is omitted', async () => {
+        const evaluateWithArgsResults = [
+            { ok: false, message: 'made-for-kids radio was not found' },
+            { ok: false, message: 'made-for-kids radio was not found' },
+        ];
+        const calls = [];
+        const page = {
+            async evaluate(script) {
+                calls.push(script);
+                return { ok: false };
+            },
+            async evaluateWithArgs() {
+                return evaluateWithArgsResults.shift();
+            },
+            async wait() {},
+        };
+
+        await expect(__test__.chooseNotMadeForKids(page, false)).resolves.toMatchObject({ skipped: true });
+        expect(calls.some((script) => script.includes('Show more'))).toBe(true);
+    });
+
+    it('still requires privacy radio selection after optional audience skip', async () => {
+        await expect(__test__.clickAndVerifyYouTubeRadio(pageReturning({ ok: false, message: 'privacy radio was not found' }), ['Public'], 'privacy')).rejects.toMatchObject({ code: 'platform_error' });
+    });
+
     it('maps auth and platform failures from publish polling to stable codes', async () => {
         await expect(__test__.waitForYouTubePublishResult(pageReturning({ text: 'session expired', anchors: [] }), 'public')).rejects.toBeInstanceOf(AuthRequiredError);
         await expect(__test__.waitForYouTubePublishResult(pageReturning({ text: 'publish failed', anchors: [] }), 'public')).rejects.toMatchObject({ code: 'platform_error' });
