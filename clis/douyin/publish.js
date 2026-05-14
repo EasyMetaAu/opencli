@@ -53,9 +53,29 @@ const DEFAULT_COVER_TOOLS_INFO = JSON.stringify({
     initial_cover_uri: '',
     cut_coordinate: '',
 });
-function isFastDetectUnavailable(error) {
+function isFastDetectRetryable(error) {
     const message = error instanceof Error ? error.message : String(error);
-    return message.includes('post_assistant/fast_detect') && (message.includes('Empty response') || message.includes('404') || message.includes('Not Found'));
+    return message.includes('post_assistant/fast_detect') && (message.includes('Empty response') || message.includes('404') || message.includes('Not Found') || message.includes('Timeout') || message.includes('timed out') || message.includes('Failed to fetch'));
+}
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+async function tryFastDetectFetch(page, method, url, options) {
+    let lastError;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+            return { ok: true, value: await browserFetch(page, method, url, options) };
+        } catch (error) {
+            if (!isFastDetectRetryable(error)) {
+                throw error;
+            }
+            lastError = error;
+            if (attempt < 3) {
+                await sleep(500 * attempt);
+            }
+        }
+    }
+    return { ok: false, error: lastError };
 }
 cli({
     site: 'douyin',
@@ -175,44 +195,42 @@ cli({
                 title,
                 desc: caption,
             };
-            let safetyCheckAvailable = true;
-            try {
-                await browserFetch(page, 'POST', safetyUrl, { body: safetyBody });
-            } catch (error) {
-                if (!isFastDetectUnavailable(error)) {
-                    throw error;
-                }
-                safetyCheckAvailable = false;
-                process.stderr.write('  内容安全预检接口不可用，跳过本地预检，交由 create_v2 后的平台审核。\n');
+            const preCheck = await tryFastDetectFetch(page, 'POST', safetyUrl, { body: safetyBody });
+            if (!preCheck.ok) {
+                process.stderr.write('  内容安全预检接口无响应，继续轮询检测结果。\n');
             }
             const pollUrl = 'https://creator.douyin.com/aweme/v1/post_assistant/fast_detect/poll';
             const deadline = Date.now() + 30_000;
             let safetyPassed = false;
-            while (safetyCheckAvailable && Date.now() < deadline) {
-                let pollRes;
-                try {
-                    pollRes = (await browserFetch(page, 'POST', pollUrl, {
-                        body: safetyBody,
-                    }));
-                } catch (error) {
-                    if (!isFastDetectUnavailable(error)) {
-                        throw error;
+            let pollUnavailableCount = 0;
+            while (Date.now() < deadline) {
+                const poll = await tryFastDetectFetch(page, 'POST', pollUrl, { body: safetyBody });
+                if (!poll.ok) {
+                    pollUnavailableCount += 1;
+                    if (!preCheck.ok && pollUnavailableCount >= 3) {
+                        break;
                     }
-                    safetyCheckAvailable = false;
-                    process.stderr.write('  内容安全轮询接口不可用，跳过本地预检，交由 create_v2 后的平台审核。\n');
-                    break;
+                    await sleep(2000);
+                    continue;
                 }
-                if (pollRes.status === 0) {
+                pollUnavailableCount = 0;
+                const pollRes = poll.value;
+                if (pollRes.status === 0 || (pollRes.has_done === true && pollRes.detect_result?.reason_code === 0 && (pollRes.detect_list?.length ?? 0) === 0)) {
                     safetyPassed = true;
                     break;
                 }
                 if (pollRes.status === 1) {
                     throw new CommandExecutionError('内容安全检测不通过，请修改后重试', '使用 --no_safety_check 跳过');
                 }
-                await new Promise((r) => setTimeout(r, 2000));
+                await sleep(2000);
             }
-            if (safetyCheckAvailable && !safetyPassed) {
-                throw new CommandExecutionError('内容安全检测超时（30s），请稍后重试', '使用 --no_safety_check 跳过');
+            if (!safetyPassed) {
+                if (!preCheck.ok && pollUnavailableCount >= 3) {
+                    process.stderr.write('  内容安全预检持续无响应，跳过本地预检，交由 create_v2 后的平台审核。\n');
+                }
+                else {
+                    throw new CommandExecutionError('内容安全检测超时（30s），请稍后重试', '如确认要跳过本地预检，可使用 --no_safety_check；提交后仍会走抖音平台审核');
+                }
             }
         }
         // ── Phase 8: create_v2 publish ──────────────────────────────────────

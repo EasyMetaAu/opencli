@@ -76,6 +76,7 @@ describe('douyin publish upload identifier handling', () => {
       if (method === 'POST' && String(url).includes('/post_assistant/fast_detect/pre_check')) {
         throw new Error('Empty response from Douyin API (POST https://creator.douyin.com/aweme/v1/post_assistant/fast_detect/pre_check)');
       }
+      if (method === 'POST' && String(url).includes('/post_assistant/fast_detect/poll')) return { status: -1, has_done: true, detect_result: { reason_code: 0 }, detect_list: [] };
       if (method === 'POST' && String(url).includes('/aweme/create_v2/')) return { item_id: 'item-1' };
       return { status_code: 0 };
     });
@@ -90,8 +91,8 @@ describe('douyin publish upload identifier handling', () => {
       video,
       title: 'OpenCLI自测',
       schedule: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
+      visibility: 'public',
       caption: 'caption',
-      visibility: 'private',
       no_safety_check: false,
     });
 

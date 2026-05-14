@@ -8199,7 +8199,7 @@
   {
     "site": "douyin",
     "name": "delete",
-    "description": "删除作品（优先调用接口；接口无权限时回退到创作者后台作品管理删除）",
+    "description": "删除作品（优先使用创作者后台作品管理；找不到时回退到旧删除接口）",
     "access": "write",
     "domain": "creator.douyin.com",
     "strategy": "cookie",
