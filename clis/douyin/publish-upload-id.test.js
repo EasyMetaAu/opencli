@@ -67,4 +67,35 @@ describe('douyin publish upload identifier handling', () => {
     expect(createCall?.[3]?.body.item.common.video_id).toBe('canonical-video-id');
     expect(createCall?.[3]?.body.item.common.video_id).not.toBe('object-key-returned-by-complete');
   });
+
+  it('continues to create_v2 when the legacy fast detect API returns an empty response', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'douyin-publish-safety-'));
+    const video = path.join(tmpDir, 'video.mp4');
+    fs.writeFileSync(video, Buffer.from('fake-video'));
+    mocks.browserFetch.mockImplementation(async (_page, method, url) => {
+      if (method === 'POST' && String(url).includes('/post_assistant/fast_detect/pre_check')) {
+        throw new Error('Empty response from Douyin API (POST https://creator.douyin.com/aweme/v1/post_assistant/fast_detect/pre_check)');
+      }
+      if (method === 'POST' && String(url).includes('/aweme/create_v2/')) return { item_id: 'item-1' };
+      return { status_code: 0 };
+    });
+
+    const { getRegistry } = await import('@jackwener/opencli/registry');
+    getRegistry().delete('douyin/publish');
+    await import('./publish.js');
+    const cmd = getRegistry().get('douyin/publish');
+    if (!cmd) throw new Error('douyin publish command not registered');
+
+    await cmd.func({}, {
+      video,
+      title: 'OpenCLI自测',
+      schedule: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
+      caption: 'caption',
+      visibility: 'private',
+      no_safety_check: false,
+    });
+
+    expect(mocks.browserFetch.mock.calls.some((call) => String(call[2]).includes('/post_assistant/fast_detect/pre_check'))).toBe(true);
+    expect(mocks.browserFetch.mock.calls.some((call) => String(call[2]).includes('/aweme/create_v2/'))).toBe(true);
+  });
 });

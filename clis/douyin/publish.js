@@ -53,6 +53,10 @@ const DEFAULT_COVER_TOOLS_INFO = JSON.stringify({
     initial_cover_uri: '',
     cut_coordinate: '',
 });
+function isFastDetectUnavailable(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.includes('post_assistant/fast_detect') && (message.includes('Empty response') || message.includes('404') || message.includes('Not Found'));
+}
 cli({
     site: 'douyin',
     name: 'publish',
@@ -171,14 +175,33 @@ cli({
                 title,
                 desc: caption,
             };
-            await browserFetch(page, 'POST', safetyUrl, { body: safetyBody });
+            let safetyCheckAvailable = true;
+            try {
+                await browserFetch(page, 'POST', safetyUrl, { body: safetyBody });
+            } catch (error) {
+                if (!isFastDetectUnavailable(error)) {
+                    throw error;
+                }
+                safetyCheckAvailable = false;
+                process.stderr.write('  内容安全预检接口不可用，跳过本地预检，交由 create_v2 后的平台审核。\n');
+            }
             const pollUrl = 'https://creator.douyin.com/aweme/v1/post_assistant/fast_detect/poll';
             const deadline = Date.now() + 30_000;
             let safetyPassed = false;
-            while (Date.now() < deadline) {
-                const pollRes = (await browserFetch(page, 'POST', pollUrl, {
-                    body: safetyBody,
-                }));
+            while (safetyCheckAvailable && Date.now() < deadline) {
+                let pollRes;
+                try {
+                    pollRes = (await browserFetch(page, 'POST', pollUrl, {
+                        body: safetyBody,
+                    }));
+                } catch (error) {
+                    if (!isFastDetectUnavailable(error)) {
+                        throw error;
+                    }
+                    safetyCheckAvailable = false;
+                    process.stderr.write('  内容安全轮询接口不可用，跳过本地预检，交由 create_v2 后的平台审核。\n');
+                    break;
+                }
                 if (pollRes.status === 0) {
                     safetyPassed = true;
                     break;
@@ -188,7 +211,7 @@ cli({
                 }
                 await new Promise((r) => setTimeout(r, 2000));
             }
-            if (!safetyPassed) {
+            if (safetyCheckAvailable && !safetyPassed) {
                 throw new CommandExecutionError('内容安全检测超时（30s），请稍后重试', '使用 --no_safety_check 跳过');
             }
         }
