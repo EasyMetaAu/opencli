@@ -166,7 +166,7 @@ export abstract class BasePage implements IPage {
         return `const ${key} = ${JSON.stringify(value)};`;
       })
       .join('\n');
-    return this.evaluate(`(async () => {\n${declarations}\nreturn await (${js});\n})()`);
+    return this.evaluate(`${declarations}\n${js}`);
   }
 
   async fetchJson(url: string, opts: FetchJsonOptions = {}): Promise<unknown> {

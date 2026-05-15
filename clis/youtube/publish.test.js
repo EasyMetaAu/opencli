@@ -12,11 +12,8 @@ function tempVideo() {
     fs.writeFileSync(file, 'fake video');
     return file;
 }
-function assertEvaluateScriptParses(script, args) {
-    const declarations = Object.entries(args)
-        .map(([key, value]) => `const ${key} = ${JSON.stringify(value)};`)
-        .join('\n');
-    expect(() => new Function(`${declarations}\n${script}`)).not.toThrow();
+function assertBrowserScriptParses(script) {
+    expect(() => new Function(script)).not.toThrow();
 }
 
 
@@ -51,25 +48,27 @@ describe('youtube publish adapter', () => {
     });
 
     it('does not fail Shorts-style upload flow when made-for-kids radio is omitted', async () => {
-        const evaluateWithArgsResults = [
+        const evaluateResults = [
             { ok: false, message: 'made-for-kids radio was not found' },
+            { ok: false },
             { ok: false, message: 'made-for-kids radio was not found' },
         ];
         const calls = [];
         const page = {
             async evaluate(script) {
+                assertBrowserScriptParses(script);
                 calls.push(script);
-                return { ok: false };
+                return evaluateResults.shift();
             },
-            async evaluateWithArgs(script, args) {
-                assertEvaluateScriptParses(script, args);
-                return evaluateWithArgsResults.shift();
+            async evaluateWithArgs() {
+                throw new Error('YouTube publish flow should keep arguments scoped locally instead of using BasePage.evaluateWithArgs');
             },
             async wait() {},
         };
 
         await expect(__test__.chooseNotMadeForKids(page, false)).resolves.toMatchObject({ skipped: true });
         expect(calls.some((script) => script.includes('Show more'))).toBe(true);
+        expect(calls.every((script) => !script.trim().startsWith('const '))).toBe(true);
     });
 
     it('still requires privacy radio selection after optional audience skip', async () => {
