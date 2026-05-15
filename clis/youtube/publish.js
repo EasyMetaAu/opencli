@@ -46,6 +46,10 @@ function timeoutMsFromSeconds(timeoutSeconds, fallbackMs) {
     return Number.isInteger(parsed) && parsed > 0 ? parsed * 1000 : fallbackMs;
 }
 
+function browserLiteral(value) {
+    return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+
 function unsupportedForInput(input) {
     if (input.schedule) {
         return unsupportedResult(PLATFORM, 'schedule', 'YouTube publish adapter currently supports immediate publish only; scheduled publish is reported as unsupported.');
@@ -130,8 +134,10 @@ async function waitForDetailsDialog(page, timeoutSeconds = DEFAULT_COMMAND_TIMEO
 }
 
 async function fillYouTubeDetails(page, title, description) {
-    const result = await page.evaluateWithArgs(`
+    const result = await page.evaluate(`
         (() => {
+            const videoTitle = ${browserLiteral(title)};
+            const videoDescription = ${browserLiteral(description)};
             ${visibleElementScript()}
             const fields = Array.from(document.querySelectorAll('[contenteditable="true"], textarea, input[type="text"]'))
                 .filter(isVisible)
@@ -145,7 +151,7 @@ async function fillYouTubeDetails(page, title, description) {
             if (fields[1]) setNativeText(fields[1], videoDescription);
             return { ok: true, fields: fields.length };
         })()
-    `, { videoTitle: title, videoDescription: description });
+    `);
     classifyPlatformFailure(PLATFORM, DOMAIN, result, 'YouTube details fill failed');
 }
 
@@ -191,10 +197,12 @@ export function classifyYouTubePublishState({ text = '', anchors = [], privacy =
 }
 
 async function clickAndVerifyYouTubeRadio(page, labels, settingName, { required = true } = {}) {
-    const result = await page.evaluateWithArgs(`
+    const result = await page.evaluate(`
         (() => {
+            const radioLabels = ${browserLiteral(labels)};
+            const settingName = ${browserLiteral(settingName)};
             ${visibleElementScript()}
-            const wanted = labels.map((label) => String(label).toLowerCase());
+            const wanted = radioLabels.map((label) => String(label).toLowerCase());
             const candidates = Array.from(document.querySelectorAll('tp-yt-paper-radio-button, ytcp-radio-button, [role="radio"], label'));
             function isChecked(el) {
                 return el.checked === true
@@ -214,7 +222,7 @@ async function clickAndVerifyYouTubeRadio(page, labels, settingName, { required 
             }
             return { ok: false, message: settingName + ' radio was not found' };
         })()
-    `, { labels, settingName });
+    `);
     if (!result?.ok) {
         if (!required && /radio was not found/i.test(result?.message || '')) {
             return { ok: false, skipped: true, message: result?.message || `YouTube ${settingName} radio was not found` };
@@ -223,9 +231,11 @@ async function clickAndVerifyYouTubeRadio(page, labels, settingName, { required 
     }
 
     await page.wait({ time: 0.3 });
-    const verified = await page.evaluateWithArgs(`
+    const verified = await page.evaluate(`
         (() => {
-            const wanted = labels.map((label) => String(label).toLowerCase());
+            const radioLabels = ${browserLiteral(labels)};
+            const settingName = ${browserLiteral(settingName)};
+            const wanted = radioLabels.map((label) => String(label).toLowerCase());
             const candidates = Array.from(document.querySelectorAll('tp-yt-paper-radio-button, ytcp-radio-button, [role="radio"], label'));
             function radioSelected(el) {
                 const nodes = [el, el.closest?.('[role="radio"]'), el.querySelector?.('[role="radio"]'), el.querySelector?.('input[type="radio"]')].filter(Boolean);
@@ -245,7 +255,7 @@ async function clickAndVerifyYouTubeRadio(page, labels, settingName, { required 
             }
             return { ok: false, message: settingName + ' radio selection could not be confirmed after click' };
         })()
-    `, { labels, settingName });
+    `);
     if (!verified?.ok) {
         throwPublishFailure(PUBLISH_ERROR_CODES.platformError, verified?.message || `YouTube ${settingName} radio selection could not be confirmed`);
     }
@@ -285,12 +295,12 @@ async function goThroughChecks(page, privacy) {
         await page.wait({ time: 1.2 });
     }
 
-    const labels = privacy === 'private'
+    const privacyLabels = privacy === 'private'
         ? ['Private', '私享', '私密']
         : privacy === 'unlisted'
             ? ['Unlisted', '不公开列出']
             : ['Public', '公开'];
-    await clickAndVerifyYouTubeRadio(page, labels, 'privacy');
+    await clickAndVerifyYouTubeRadio(page, privacyLabels, 'privacy');
 }
 
 async function clickPublish(page) {
@@ -308,13 +318,14 @@ async function clickPublish(page) {
 async function waitForYouTubePublishResult(page, privacy, timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS) {
     const deadline = Date.now() + timeoutMsFromSeconds(timeoutSeconds, PUBLISH_TIMEOUT_MS);
     while (Date.now() < deadline) {
-        const result = await page.evaluateWithArgs(`
+        const result = await page.evaluate(`
             (() => {
+                const privacy = ${browserLiteral(privacy)};
                 const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
                 const anchors = Array.from(document.querySelectorAll('a[href*="watch?v="], a[href*="youtu.be/"]')).map((a) => a.href).filter(Boolean);
                 return { text, anchors, privacy };
             })()
-        `, { privacy });
+        `);
         const state = classifyYouTubePublishState(result);
         if (state?.ok) return state;
         classifyPlatformFailure(PLATFORM, DOMAIN, state, 'YouTube publish failed');
