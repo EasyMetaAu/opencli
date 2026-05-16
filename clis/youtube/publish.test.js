@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getRegistry } from '@jackwener/opencli/registry';
 import { ArgumentError, AuthRequiredError } from '@jackwener/opencli/errors';
 import { publishCommand, __test__ } from './publish.js';
@@ -22,6 +22,9 @@ function pageReturning(result) {
 }
 
 describe('youtube publish adapter', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
     it('registers a write publish command with structured columns', () => {
         const cmd = [...getRegistry().values()].find((c) => c.site === 'youtube' && c.name === 'publish');
         expect(cmd).toBeDefined();
@@ -41,6 +44,38 @@ describe('youtube publish adapter', () => {
         await expect(publishCommand.func({}, { video, title: 'x', schedule: '2026-01-01T00:00:00Z' })).resolves.toMatchObject([{ code: 'unsupported_capability', capability: 'schedule' }]);
         await expect(publishCommand.func({}, { video, title: 'x', cover: '/tmp/cover.png' })).resolves.toMatchObject([{ code: 'unsupported_capability', capability: 'cover' }]);
         await expect(publishCommand.func({}, { video, title: 'x', account: 'brand' })).resolves.toMatchObject([{ code: 'unsupported_capability', capability: 'account' }]);
+    });
+
+    it('passes --timeout into the upload details inner wait', async () => {
+        const video = tempVideo();
+        let now = 0;
+        vi.spyOn(Date, 'now').mockImplementation(() => {
+            const current = now;
+            now += 1000;
+            return current;
+        });
+        const page = {
+            goto: vi.fn().mockResolvedValue(undefined),
+            evaluate: vi.fn(async (script) => {
+                const code = String(script);
+                if (code.includes('daily upload limit')) return null;
+                if (code.includes('YouTube Studio requires login')) return { ok: true };
+                if (code.includes("document.querySelector('input[type=\"file\"]')")) return true;
+                return null;
+            }),
+            evaluateWithArgs: vi.fn().mockResolvedValue('input[type="file"]'),
+            wait: vi.fn().mockResolvedValue(undefined),
+            setFileInput: vi.fn().mockResolvedValue(undefined),
+        };
+
+        await expect(publishCommand.func(page, {
+            video,
+            title: 'Timeout propagation',
+            privacy: 'unlisted',
+            timeout: 2,
+        })).rejects.toMatchObject({ code: 'upload_failed' });
+
+        expect(page.wait).toHaveBeenCalledTimes(1);
     });
 
     it('does not fail Shorts-style upload flow when made-for-kids radio is omitted', async () => {

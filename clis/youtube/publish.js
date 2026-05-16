@@ -41,6 +41,11 @@ function requirePositiveTimeoutSeconds(value) {
     return parsed;
 }
 
+function timeoutMsFromSeconds(timeoutSeconds, fallbackMs) {
+    const parsed = Number(timeoutSeconds);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed * 1000 : fallbackMs;
+}
+
 function unsupportedForInput(input) {
     if (input.schedule) {
         return unsupportedResult(PLATFORM, 'schedule', 'YouTube publish adapter currently supports immediate publish only; scheduled publish is reported as unsupported.');
@@ -98,8 +103,8 @@ async function openUploadDialog(page) {
     }
 }
 
-async function waitForDetailsDialog(page) {
-    const deadline = Date.now() + DIALOG_TIMEOUT_MS;
+async function waitForDetailsDialog(page, timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS) {
+    const deadline = Date.now() + timeoutMsFromSeconds(timeoutSeconds, DIALOG_TIMEOUT_MS);
     while (Date.now() < deadline) {
         const result = await page.evaluate(`
             (() => {
@@ -300,8 +305,8 @@ async function clickPublish(page) {
     }
 }
 
-async function waitForYouTubePublishResult(page, privacy) {
-    const deadline = Date.now() + PUBLISH_TIMEOUT_MS;
+async function waitForYouTubePublishResult(page, privacy, timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS) {
+    const deadline = Date.now() + timeoutMsFromSeconds(timeoutSeconds, PUBLISH_TIMEOUT_MS);
     while (Date.now() < deadline) {
         const result = await page.evaluateWithArgs(`
             (() => {
@@ -346,7 +351,7 @@ export const publishCommand = cli({
             maxDescriptionLength: 5000,
             validateCover: false,
         });
-        requirePositiveTimeoutSeconds(kwargs.timeout);
+        const timeoutSeconds = requirePositiveTimeoutSeconds(kwargs.timeout);
         const unsupported = unsupportedForInput(input);
         if (unsupported) return unsupported;
 
@@ -355,13 +360,13 @@ export const publishCommand = cli({
         await assertYouTubeLoggedIn(page);
         await openUploadDialog(page);
         await setFileInput(page, [input.videoPath], FILE_SELECTORS, PLATFORM);
-        await waitForDetailsDialog(page);
+        await waitForDetailsDialog(page, timeoutSeconds);
 
         const description = buildDescriptionWithTags(input.description, input.tags);
         await fillYouTubeDetails(page, input.title, description);
         await goThroughChecks(page, input.privacy);
         await clickPublish(page);
-        const publishResult = await waitForYouTubePublishResult(page, input.privacy);
+        const publishResult = await waitForYouTubePublishResult(page, input.privacy, timeoutSeconds);
 
         return successResult(PLATFORM, publishResult.message || 'YouTube publish completed', {
             url: publishResult.url || '',
@@ -377,5 +382,6 @@ export const __test__ = {
     goThroughChecks,
     clickAndVerifyYouTubeRadio,
     classifyYouTubePublishState,
+    waitForDetailsDialog,
     waitForYouTubePublishResult,
 };
