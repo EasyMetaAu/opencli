@@ -20,18 +20,9 @@ const FILE_SELECTORS = [
     'input[type="file"][accept*="video"]',
     'input[type="file"]',
 ];
-const UPLOAD_TIMEOUT_MS = 240_000;
 const POLL_MS = 1500;
 const DEFAULT_COMMAND_TIMEOUT_SECONDS = 420;
-const DIALOG_TIMEOUT_MS = envTimeoutMs('OPENCLI_YOUTUBE_DIALOG_TIMEOUT', 180_000);
-const PUBLISH_TIMEOUT_MS = envTimeoutMs('OPENCLI_YOUTUBE_PUBLISH_TIMEOUT', 180_000);
 
-function envTimeoutMs(name, fallbackMs) {
-    const raw = process.env[name];
-    if (!raw) return fallbackMs;
-    const parsed = Number(raw);
-    return Number.isInteger(parsed) && parsed > 0 ? parsed * 1000 : fallbackMs;
-}
 
 function requirePositiveTimeoutSeconds(value) {
     const parsed = Number(value ?? DEFAULT_COMMAND_TIMEOUT_SECONDS);
@@ -46,8 +37,20 @@ function timeoutMsFromSeconds(timeoutSeconds, fallbackMs) {
     return Number.isInteger(parsed) && parsed > 0 ? parsed * 1000 : fallbackMs;
 }
 
+function createFlowDeadline(timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS) {
+    return Date.now() + timeoutMsFromSeconds(timeoutSeconds, DEFAULT_COMMAND_TIMEOUT_SECONDS * 1000);
+}
+
+function remainingTimeoutMs(deadlineMs) {
+    return Math.max(0, Number(deadlineMs) - Date.now());
+}
+
 function browserLiteral(value) {
     return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+
+function basename(filePath) {
+    return String(filePath || '').split(/[\\/]/).filter(Boolean).pop() || '';
 }
 
 function unsupportedForInput(input) {
@@ -107,9 +110,80 @@ async function openUploadDialog(page) {
     }
 }
 
-async function waitForDetailsDialog(page, timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS) {
-    const deadline = Date.now() + timeoutMsFromSeconds(timeoutSeconds, DIALOG_TIMEOUT_MS);
-    while (Date.now() < deadline) {
+async function collectUploadDiagnostics(page) {
+    try {
+        return await page.evaluate(`
+            (() => {
+                const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+                const textboxes = Array.from(document.querySelectorAll('[contenteditable="true"], textarea, input[type="text"]'));
+                const fileInputs = Array.from(document.querySelectorAll('input[type="file"]')).map((input) => ({
+                    count: input.files?.length || 0,
+                    names: Array.from(input.files || []).map((file) => file.name).filter(Boolean),
+                    accept: input.getAttribute('accept') || '',
+                    visible: !!(input.offsetWidth || input.offsetHeight || input.getClientRects().length),
+                }));
+                return {
+                    url: location.href,
+                    title: document.title || '',
+                    modalTitle: document.querySelector('ytcp-uploads-dialog #title, [role="dialog"] #title')?.innerText || '',
+                    text: text.slice(0, 1000),
+                    fileInputs,
+                    filePickerVisible: /select files|选择文件|drag and drop|拖放/i.test(text) || !!document.querySelector('ytcp-uploads-file-picker'),
+                    detailsReady: textboxes.length >= 1 && /details|video details|title|description|详情|标题|说明/i.test(text),
+                };
+            })()
+        `);
+    } catch (error) {
+        return { diagnosticError: error instanceof Error ? error.message : String(error) };
+    }
+}
+
+function formatUploadDiagnostics(diagnostics = {}) {
+    const inputs = Array.isArray(diagnostics.fileInputs)
+        ? diagnostics.fileInputs.map((input, index) => {
+            const names = Array.isArray(input.names) && input.names.length ? input.names.join('|') : 'none';
+            return `#${index}:count=${input.count || 0},names=${names},accept=${input.accept || 'none'}`;
+        }).join('; ')
+        : 'unknown';
+    const text = String(diagnostics.text || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+    return [
+        `url=${diagnostics.url || 'unknown'}`,
+        `modalTitle=${diagnostics.modalTitle || 'unknown'}`,
+        `filePickerVisible=${diagnostics.filePickerVisible === true}`,
+        `detailsReady=${diagnostics.detailsReady === true}`,
+        `fileInputs=[${inputs}]`,
+        diagnostics.diagnosticError ? `diagnosticError=${diagnostics.diagnosticError}` : '',
+        text ? `text="${text}"` : '',
+    ].filter(Boolean).join('; ');
+}
+
+async function verifyYouTubeFileSelected(page, expectedPath) {
+    const diagnostics = await collectUploadDiagnostics(page);
+    if (diagnostics?.detailsReady) return diagnostics;
+
+    const selectedInputs = Array.isArray(diagnostics?.fileInputs)
+        ? diagnostics.fileInputs.filter((input) => Number(input.count) > 0)
+        : [];
+    if (selectedInputs.length === 0) {
+        throwPublishFailure(
+            PUBLISH_ERROR_CODES.uploadFailed,
+            `YouTube upload failed: file input has no selected file after setFileInput (${formatUploadDiagnostics(diagnostics)})`,
+        );
+    }
+
+    const expectedName = basename(expectedPath);
+    const selectedNames = selectedInputs.flatMap((input) => Array.isArray(input.names) ? input.names : []);
+    if (expectedName && selectedNames.length > 0 && !selectedNames.includes(expectedName)) {
+        throwPublishFailure(
+            PUBLISH_ERROR_CODES.uploadFailed,
+            `YouTube upload failed: selected file name did not match ${expectedName} (${formatUploadDiagnostics(diagnostics)})`,
+        );
+    }
+    return diagnostics;
+}
+
+async function waitForDetailsDialog(page, flowDeadlineMs = createFlowDeadline()) {
+    while (Date.now() < flowDeadlineMs) {
         const result = await page.evaluate(`
             (() => {
                 const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
@@ -128,9 +202,14 @@ async function waitForDetailsDialog(page, timeoutSeconds = DEFAULT_COMMAND_TIMEO
         `);
         if (result?.ok) return;
         classifyPlatformFailure(PLATFORM, DOMAIN, result, 'YouTube upload failed');
-        await page.wait({ time: POLL_MS / 1000 });
+        const waitMs = Math.min(POLL_MS, remainingTimeoutMs(flowDeadlineMs));
+        if (waitMs > 0) await page.wait({ time: waitMs / 1000 });
     }
-    throwPublishFailure(PUBLISH_ERROR_CODES.uploadFailed, 'YouTube upload details dialog did not appear before timeout');
+    const diagnostics = await collectUploadDiagnostics(page);
+    throwPublishFailure(
+        PUBLISH_ERROR_CODES.uploadFailed,
+        `YouTube upload details dialog did not appear before timeout (${formatUploadDiagnostics(diagnostics)})`,
+    );
 }
 
 async function fillYouTubeDetails(page, title, description) {
@@ -315,9 +394,8 @@ async function clickPublish(page) {
     }
 }
 
-async function waitForYouTubePublishResult(page, privacy, timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS) {
-    const deadline = Date.now() + timeoutMsFromSeconds(timeoutSeconds, PUBLISH_TIMEOUT_MS);
-    while (Date.now() < deadline) {
+async function waitForYouTubePublishResult(page, privacy, flowDeadlineMs = createFlowDeadline()) {
+    while (Date.now() < flowDeadlineMs) {
         const result = await page.evaluate(`
             (() => {
                 const privacy = ${browserLiteral(privacy)};
@@ -329,7 +407,8 @@ async function waitForYouTubePublishResult(page, privacy, timeoutSeconds = DEFAU
         const state = classifyYouTubePublishState(result);
         if (state?.ok) return state;
         classifyPlatformFailure(PLATFORM, DOMAIN, state, 'YouTube publish failed');
-        await page.wait({ time: POLL_MS / 1000 });
+        const waitMs = Math.min(POLL_MS, remainingTimeoutMs(flowDeadlineMs));
+        if (waitMs > 0) await page.wait({ time: waitMs / 1000 });
     }
     throwPublishFailure(PUBLISH_ERROR_CODES.platformError, 'YouTube publish/save clicked but final publish state was not confirmed before timeout; check YouTube Studio manually.');
 }
@@ -363,6 +442,7 @@ export const publishCommand = cli({
             validateCover: false,
         });
         const timeoutSeconds = requirePositiveTimeoutSeconds(kwargs.timeout);
+        const flowDeadlineMs = createFlowDeadline(timeoutSeconds);
         const unsupported = unsupportedForInput(input);
         if (unsupported) return unsupported;
 
@@ -370,14 +450,15 @@ export const publishCommand = cli({
         await page.goto(STUDIO_URL, { waitUntil: 'load', settleMs: 4000 });
         await assertYouTubeLoggedIn(page);
         await openUploadDialog(page);
-        await setFileInput(page, [input.videoPath], FILE_SELECTORS, PLATFORM);
-        await waitForDetailsDialog(page, timeoutSeconds);
+        await setFileInput(page, [input.videoPath], FILE_SELECTORS, PLATFORM, remainingTimeoutMs(flowDeadlineMs));
+        await verifyYouTubeFileSelected(page, input.videoPath);
+        await waitForDetailsDialog(page, flowDeadlineMs);
 
         const description = buildDescriptionWithTags(input.description, input.tags);
         await fillYouTubeDetails(page, input.title, description);
         await goThroughChecks(page, input.privacy);
         await clickPublish(page);
-        const publishResult = await waitForYouTubePublishResult(page, input.privacy, timeoutSeconds);
+        const publishResult = await waitForYouTubePublishResult(page, input.privacy, flowDeadlineMs);
 
         return successResult(PLATFORM, publishResult.message || 'YouTube publish completed', {
             url: publishResult.url || '',
@@ -393,6 +474,11 @@ export const __test__ = {
     goThroughChecks,
     clickAndVerifyYouTubeRadio,
     classifyYouTubePublishState,
+    collectUploadDiagnostics,
+    formatUploadDiagnostics,
+    verifyYouTubeFileSelected,
+    createFlowDeadline,
+    remainingTimeoutMs,
     waitForDetailsDialog,
     waitForYouTubePublishResult,
 };

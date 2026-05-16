@@ -183,8 +183,8 @@ export async function waitForAnySelector(page, selectors, timeoutMs = 30_000, in
     return '';
 }
 
-export async function setFileInput(page, files, selectors, platform) {
-    const selector = await waitForAnySelector(page, selectors, 45_000, 750);
+export async function setFileInput(page, files, selectors, platform, timeoutMs = 45_000) {
+    const selector = await waitForAnySelector(page, selectors, timeoutMs, 750);
     if (!selector) {
         throwPublishFailure(PUBLISH_ERROR_CODES.uploadFailed, `${platform} upload failed: file input was not found`);
     }

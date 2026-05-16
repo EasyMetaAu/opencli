@@ -50,36 +50,63 @@ describe('youtube publish adapter', () => {
         await expect(publishCommand.func({}, { video, title: 'x', account: 'brand' })).resolves.toMatchObject([{ code: 'unsupported_capability', capability: 'account' }]);
     });
 
-    it('passes --timeout into the upload details inner wait', async () => {
-        const video = tempVideo();
-        let now = 0;
-        vi.spyOn(Date, 'now').mockImplementation(() => {
-            const current = now;
-            now += 1000;
-            return current;
-        });
+    it('treats --timeout as one full-flow deadline instead of resetting per wait', async () => {
+        vi.spyOn(Date, 'now')
+            .mockReturnValueOnce(1000)
+            .mockReturnValueOnce(2500)
+            .mockReturnValueOnce(3500);
+
+        const deadline = __test__.createFlowDeadline(2);
+
+        expect(deadline).toBe(3000);
+        expect(__test__.remainingTimeoutMs(deadline)).toBe(500);
+        expect(__test__.remainingTimeoutMs(deadline)).toBe(0);
+    });
+
+    it('fails fast with upload diagnostics when setFileInput leaves the picker empty', async () => {
         const page = {
-            goto: vi.fn().mockResolvedValue(undefined),
-            evaluate: vi.fn(async (script) => {
-                const code = String(script);
-                if (code.includes('daily upload limit')) return null;
-                if (code.includes('YouTube Studio requires login')) return { ok: true };
-                if (code.includes("document.querySelector('input[type=\"file\"]')")) return true;
-                return null;
+            evaluate: vi.fn().mockResolvedValue({
+                url: 'https://studio.youtube.com/channel/demo',
+                modalTitle: '上传视频',
+                text: '上传视频 将要上传的视频文件拖放到此处 选择文件',
+                filePickerVisible: true,
+                detailsReady: false,
+                fileInputs: [{ count: 0, names: [], accept: '' }],
             }),
-            evaluateWithArgs: vi.fn().mockResolvedValue('input[type="file"]'),
-            wait: vi.fn().mockResolvedValue(undefined),
-            setFileInput: vi.fn().mockResolvedValue(undefined),
         };
 
-        await expect(publishCommand.func(page, {
-            video,
-            title: 'Timeout propagation',
-            privacy: 'unlisted',
-            timeout: 2,
-        })).rejects.toMatchObject({ code: 'upload_failed' });
+        await expect(__test__.verifyYouTubeFileSelected(page, '/tmp/video.mp4')).rejects.toMatchObject({
+            code: 'upload_failed',
+            message: expect.stringContaining('file input has no selected file'),
+        });
+        await expect(__test__.verifyYouTubeFileSelected(page, '/tmp/video.mp4')).rejects.toMatchObject({
+            message: expect.stringContaining('filePickerVisible=true'),
+        });
+    });
 
-        expect(page.wait).toHaveBeenCalledTimes(1);
+    it('adds upload diagnostics to details-dialog timeout errors', async () => {
+        const page = {
+            evaluate: vi.fn(async (script) => {
+                const code = String(script);
+                if (code.includes('fileInputs')) {
+                    return {
+                        url: 'https://studio.youtube.com/channel/demo',
+                        modalTitle: '上传视频',
+                        text: '选择文件',
+                        filePickerVisible: true,
+                        detailsReady: false,
+                        fileInputs: [{ count: 0, names: [] }],
+                    };
+                }
+                return null;
+            }),
+            wait: vi.fn().mockResolvedValue(undefined),
+        };
+
+        await expect(__test__.waitForDetailsDialog(page, Date.now() - 1)).rejects.toMatchObject({
+            code: 'upload_failed',
+            message: expect.stringContaining('fileInputs=[#0:count=0'),
+        });
     });
 
     it('does not fail Shorts-style upload flow when made-for-kids radio is omitted', async () => {
