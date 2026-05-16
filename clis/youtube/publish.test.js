@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getRegistry } from '@jackwener/opencli/registry';
 import { ArgumentError, AuthRequiredError } from '@jackwener/opencli/errors';
 import { publishCommand, __test__ } from './publish.js';
@@ -12,6 +12,10 @@ function tempVideo() {
     fs.writeFileSync(file, 'fake video');
     return file;
 }
+function assertBrowserScriptParses(script) {
+    expect(() => new Function(script)).not.toThrow();
+}
+
 
 function pageReturning(result) {
     return {
@@ -22,6 +26,9 @@ function pageReturning(result) {
 }
 
 describe('youtube publish adapter', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
     it('registers a write publish command with structured columns', () => {
         const cmd = [...getRegistry().values()].find((c) => c.site === 'youtube' && c.name === 'publish');
         expect(cmd).toBeDefined();
@@ -43,25 +50,87 @@ describe('youtube publish adapter', () => {
         await expect(publishCommand.func({}, { video, title: 'x', account: 'brand' })).resolves.toMatchObject([{ code: 'unsupported_capability', capability: 'account' }]);
     });
 
+    it('treats --timeout as one full-flow deadline instead of resetting per wait', async () => {
+        vi.spyOn(Date, 'now')
+            .mockReturnValueOnce(1000)
+            .mockReturnValueOnce(2500)
+            .mockReturnValueOnce(3500);
+
+        const deadline = __test__.createFlowDeadline(2);
+
+        expect(deadline).toBe(3000);
+        expect(__test__.remainingTimeoutMs(deadline)).toBe(500);
+        expect(__test__.remainingTimeoutMs(deadline)).toBe(0);
+    });
+
+    it('fails fast with upload diagnostics when setFileInput leaves the picker empty', async () => {
+        const page = {
+            evaluate: vi.fn().mockResolvedValue({
+                pageUrl: 'https://studio.youtube.com/channel/demo',
+                dialogTitle: '上传视频',
+                bodyText: '上传视频 将要上传的视频文件拖放到此处 选择文件',
+                pickerVisible: true,
+                isDetailsReady: false,
+                inputs: [{ count: 0, names: [], accept: '' }],
+            }),
+        };
+
+        await expect(__test__.verifyYouTubeFileSelected(page, '/tmp/video.mp4')).rejects.toMatchObject({
+            code: 'upload_failed',
+            message: expect.stringContaining('file input has no selected file'),
+        });
+        await expect(__test__.verifyYouTubeFileSelected(page, '/tmp/video.mp4')).rejects.toMatchObject({
+            message: expect.stringContaining('pickerVisible=true'),
+        });
+    });
+
+    it('adds upload diagnostics to details-dialog timeout errors', async () => {
+        const page = {
+            evaluate: vi.fn(async (script) => {
+                const code = String(script);
+                if (code.includes('inputs')) {
+                    return {
+                        pageUrl: 'https://studio.youtube.com/channel/demo',
+                        dialogTitle: '上传视频',
+                        bodyText: '选择文件',
+                        pickerVisible: true,
+                        isDetailsReady: false,
+                        inputs: [{ count: 0, names: [] }],
+                    };
+                }
+                return null;
+            }),
+            wait: vi.fn().mockResolvedValue(undefined),
+        };
+
+        await expect(__test__.waitForDetailsDialog(page, Date.now() - 1)).rejects.toMatchObject({
+            code: 'upload_failed',
+            message: expect.stringContaining('inputs=[#0:count=0'),
+        });
+    });
+
     it('does not fail Shorts-style upload flow when made-for-kids radio is omitted', async () => {
-        const evaluateWithArgsResults = [
+        const evaluateResults = [
             { ok: false, message: 'made-for-kids radio was not found' },
+            { ok: false },
             { ok: false, message: 'made-for-kids radio was not found' },
         ];
         const calls = [];
         const page = {
             async evaluate(script) {
+                assertBrowserScriptParses(script);
                 calls.push(script);
-                return { ok: false };
+                return evaluateResults.shift();
             },
             async evaluateWithArgs() {
-                return evaluateWithArgsResults.shift();
+                throw new Error('YouTube publish flow should keep arguments scoped locally instead of using BasePage.evaluateWithArgs');
             },
             async wait() {},
         };
 
         await expect(__test__.chooseNotMadeForKids(page, false)).resolves.toMatchObject({ skipped: true });
         expect(calls.some((script) => script.includes('Show more'))).toBe(true);
+        expect(calls.every((script) => !script.trim().startsWith('const '))).toBe(true);
     });
 
     it('still requires privacy radio selection after optional audience skip', async () => {

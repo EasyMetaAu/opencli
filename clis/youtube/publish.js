@@ -1,5 +1,5 @@
 import { cli, Strategy } from '@jackwener/opencli/registry';
-import { AuthRequiredError } from '@jackwener/opencli/errors';
+import { ArgumentError, AuthRequiredError } from '@jackwener/opencli/errors';
 import {
     buildDescriptionWithTags,
     PUBLISH_ERROR_CODES,
@@ -20,10 +20,38 @@ const FILE_SELECTORS = [
     'input[type="file"][accept*="video"]',
     'input[type="file"]',
 ];
-const UPLOAD_TIMEOUT_MS = 240_000;
 const POLL_MS = 1500;
-const DIALOG_TIMEOUT_MS = 60_000;
-const PUBLISH_TIMEOUT_MS = 120_000;
+const DEFAULT_COMMAND_TIMEOUT_SECONDS = 420;
+
+
+function requirePositiveTimeoutSeconds(value) {
+    const parsed = Number(value ?? DEFAULT_COMMAND_TIMEOUT_SECONDS);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new ArgumentError('youtube publish --timeout must be a positive integer (seconds)');
+    }
+    return parsed;
+}
+
+function timeoutMsFromSeconds(timeoutSeconds, fallbackMs) {
+    const parsed = Number(timeoutSeconds);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed * 1000 : fallbackMs;
+}
+
+function createFlowDeadline(timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS) {
+    return Date.now() + timeoutMsFromSeconds(timeoutSeconds, DEFAULT_COMMAND_TIMEOUT_SECONDS * 1000);
+}
+
+function remainingTimeoutMs(deadlineMs) {
+    return Math.max(0, Number(deadlineMs) - Date.now());
+}
+
+function browserLiteral(value) {
+    return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+
+function basename(filePath) {
+    return String(filePath || '').split(/[\\/]/).filter(Boolean).pop() || '';
+}
 
 function unsupportedForInput(input) {
     if (input.schedule) {
@@ -82,9 +110,80 @@ async function openUploadDialog(page) {
     }
 }
 
-async function waitForDetailsDialog(page) {
-    const deadline = Date.now() + DIALOG_TIMEOUT_MS;
-    while (Date.now() < deadline) {
+async function collectUploadDiagnostics(page) {
+    try {
+        return await page.evaluate(`
+            (() => {
+                const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+                const textboxes = Array.from(document.querySelectorAll('[contenteditable="true"], textarea, input[type="text"]'));
+                const inputs = Array.from(document.querySelectorAll('input[type="file"]')).map((input) => ({
+                    count: input.files?.length || 0,
+                    names: Array.from(input.files || []).map((file) => file.name).filter(Boolean),
+                    accept: input.getAttribute('accept') || '',
+                    visible: !!(input.offsetWidth || input.offsetHeight || input.getClientRects().length),
+                }));
+                return {
+                    pageUrl: location.href,
+                    pageTitle: document.title || '',
+                    dialogTitle: document.querySelector('ytcp-uploads-dialog #title, [role="dialog"] #title')?.innerText || '',
+                    bodyText: text.slice(0, 1000),
+                    inputs,
+                    pickerVisible: /select files|选择文件|drag and drop|拖放/i.test(text) || !!document.querySelector('ytcp-uploads-file-picker'),
+                    isDetailsReady: textboxes.length >= 1 && /details|video details|title|description|详情|标题|说明/i.test(text),
+                };
+            })()
+        `);
+    } catch (error) {
+        return { diagnosticError: error instanceof Error ? error.message : String(error) };
+    }
+}
+
+function formatUploadDiagnostics(diagnostics = {}) {
+    const inputs = Array.isArray(diagnostics.inputs)
+        ? diagnostics.inputs.map((input, index) => {
+            const names = Array.isArray(input.names) && input.names.length ? input.names.join('|') : 'none';
+            return `#${index}:count=${input.count || 0},names=${names},accept=${input.accept || 'none'}`;
+        }).join('; ')
+        : 'unknown';
+    const text = String(diagnostics.bodyText || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+    return [
+        diagnostics.pageUrl ? `pageUrl=${diagnostics.pageUrl}` : '',
+        diagnostics.dialogTitle ? `dialogTitle=${diagnostics.dialogTitle}` : '',
+        `pickerVisible=${diagnostics.pickerVisible === true}`,
+        `isDetailsReady=${diagnostics.isDetailsReady === true}`,
+        `inputs=[${inputs}]`,
+        diagnostics.diagnosticError ? `diagnosticError=${diagnostics.diagnosticError}` : '',
+        text ? `bodyText="${text}"` : '',
+    ].filter(Boolean).join('; ');
+}
+
+async function verifyYouTubeFileSelected(page, expectedPath) {
+    const diagnostics = await collectUploadDiagnostics(page);
+    if (diagnostics?.isDetailsReady) return diagnostics;
+
+    const selectedInputs = Array.isArray(diagnostics?.inputs)
+        ? diagnostics.inputs.filter((input) => Number(input.count) > 0)
+        : [];
+    if (selectedInputs.length === 0) {
+        throwPublishFailure(
+            PUBLISH_ERROR_CODES.uploadFailed,
+            `YouTube upload failed: file input has no selected file after setFileInput (${formatUploadDiagnostics(diagnostics)})`,
+        );
+    }
+
+    const expectedName = basename(expectedPath);
+    const selectedNames = selectedInputs.flatMap((input) => Array.isArray(input.names) ? input.names : []);
+    if (expectedName && selectedNames.length > 0 && !selectedNames.includes(expectedName)) {
+        throwPublishFailure(
+            PUBLISH_ERROR_CODES.uploadFailed,
+            `YouTube upload failed: selected file name did not match ${expectedName} (${formatUploadDiagnostics(diagnostics)})`,
+        );
+    }
+    return diagnostics;
+}
+
+async function waitForDetailsDialog(page, flowDeadlineMs = createFlowDeadline()) {
+    while (Date.now() < flowDeadlineMs) {
         const result = await page.evaluate(`
             (() => {
                 const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
@@ -103,14 +202,21 @@ async function waitForDetailsDialog(page) {
         `);
         if (result?.ok) return;
         classifyPlatformFailure(PLATFORM, DOMAIN, result, 'YouTube upload failed');
-        await page.wait({ time: POLL_MS / 1000 });
+        const waitMs = Math.min(POLL_MS, remainingTimeoutMs(flowDeadlineMs));
+        if (waitMs > 0) await page.wait({ time: waitMs / 1000 });
     }
-    throwPublishFailure(PUBLISH_ERROR_CODES.uploadFailed, 'YouTube upload details dialog did not appear before timeout');
+    const diagnostics = await collectUploadDiagnostics(page);
+    throwPublishFailure(
+        PUBLISH_ERROR_CODES.uploadFailed,
+        `YouTube upload details dialog did not appear before timeout (${formatUploadDiagnostics(diagnostics)})`,
+    );
 }
 
 async function fillYouTubeDetails(page, title, description) {
-    const result = await page.evaluateWithArgs(`
+    const result = await page.evaluate(`
         (() => {
+            const videoTitle = ${browserLiteral(title)};
+            const videoDescription = ${browserLiteral(description)};
             ${visibleElementScript()}
             const fields = Array.from(document.querySelectorAll('[contenteditable="true"], textarea, input[type="text"]'))
                 .filter(isVisible)
@@ -124,7 +230,7 @@ async function fillYouTubeDetails(page, title, description) {
             if (fields[1]) setNativeText(fields[1], videoDescription);
             return { ok: true, fields: fields.length };
         })()
-    `, { videoTitle: title, videoDescription: description });
+    `);
     classifyPlatformFailure(PLATFORM, DOMAIN, result, 'YouTube details fill failed');
 }
 
@@ -170,10 +276,12 @@ export function classifyYouTubePublishState({ text = '', anchors = [], privacy =
 }
 
 async function clickAndVerifyYouTubeRadio(page, labels, settingName, { required = true } = {}) {
-    const result = await page.evaluateWithArgs(`
+    const result = await page.evaluate(`
         (() => {
+            const radioLabels = ${browserLiteral(labels)};
+            const settingName = ${browserLiteral(settingName)};
             ${visibleElementScript()}
-            const wanted = labels.map((label) => String(label).toLowerCase());
+            const wanted = radioLabels.map((label) => String(label).toLowerCase());
             const candidates = Array.from(document.querySelectorAll('tp-yt-paper-radio-button, ytcp-radio-button, [role="radio"], label'));
             function isChecked(el) {
                 return el.checked === true
@@ -193,7 +301,7 @@ async function clickAndVerifyYouTubeRadio(page, labels, settingName, { required 
             }
             return { ok: false, message: settingName + ' radio was not found' };
         })()
-    `, { labels, settingName });
+    `);
     if (!result?.ok) {
         if (!required && /radio was not found/i.test(result?.message || '')) {
             return { ok: false, skipped: true, message: result?.message || `YouTube ${settingName} radio was not found` };
@@ -202,9 +310,11 @@ async function clickAndVerifyYouTubeRadio(page, labels, settingName, { required 
     }
 
     await page.wait({ time: 0.3 });
-    const verified = await page.evaluateWithArgs(`
+    const verified = await page.evaluate(`
         (() => {
-            const wanted = labels.map((label) => String(label).toLowerCase());
+            const radioLabels = ${browserLiteral(labels)};
+            const settingName = ${browserLiteral(settingName)};
+            const wanted = radioLabels.map((label) => String(label).toLowerCase());
             const candidates = Array.from(document.querySelectorAll('tp-yt-paper-radio-button, ytcp-radio-button, [role="radio"], label'));
             function radioSelected(el) {
                 const nodes = [el, el.closest?.('[role="radio"]'), el.querySelector?.('[role="radio"]'), el.querySelector?.('input[type="radio"]')].filter(Boolean);
@@ -224,7 +334,7 @@ async function clickAndVerifyYouTubeRadio(page, labels, settingName, { required 
             }
             return { ok: false, message: settingName + ' radio selection could not be confirmed after click' };
         })()
-    `, { labels, settingName });
+    `);
     if (!verified?.ok) {
         throwPublishFailure(PUBLISH_ERROR_CODES.platformError, verified?.message || `YouTube ${settingName} radio selection could not be confirmed`);
     }
@@ -264,12 +374,12 @@ async function goThroughChecks(page, privacy) {
         await page.wait({ time: 1.2 });
     }
 
-    const labels = privacy === 'private'
+    const privacyLabels = privacy === 'private'
         ? ['Private', '私享', '私密']
         : privacy === 'unlisted'
             ? ['Unlisted', '不公开列出']
             : ['Public', '公开'];
-    await clickAndVerifyYouTubeRadio(page, labels, 'privacy');
+    await clickAndVerifyYouTubeRadio(page, privacyLabels, 'privacy');
 }
 
 async function clickPublish(page) {
@@ -284,20 +394,21 @@ async function clickPublish(page) {
     }
 }
 
-async function waitForYouTubePublishResult(page, privacy) {
-    const deadline = Date.now() + PUBLISH_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-        const result = await page.evaluateWithArgs(`
+async function waitForYouTubePublishResult(page, privacy, flowDeadlineMs = createFlowDeadline()) {
+    while (Date.now() < flowDeadlineMs) {
+        const result = await page.evaluate(`
             (() => {
+                const privacy = ${browserLiteral(privacy)};
                 const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
                 const anchors = Array.from(document.querySelectorAll('a[href*="watch?v="], a[href*="youtu.be/"]')).map((a) => a.href).filter(Boolean);
                 return { text, anchors, privacy };
             })()
-        `, { privacy });
+        `);
         const state = classifyYouTubePublishState(result);
         if (state?.ok) return state;
         classifyPlatformFailure(PLATFORM, DOMAIN, state, 'YouTube publish failed');
-        await page.wait({ time: POLL_MS / 1000 });
+        const waitMs = Math.min(POLL_MS, remainingTimeoutMs(flowDeadlineMs));
+        if (waitMs > 0) await page.wait({ time: waitMs / 1000 });
     }
     throwPublishFailure(PUBLISH_ERROR_CODES.platformError, 'YouTube publish/save clicked but final publish state was not confirmed before timeout; check YouTube Studio manually.');
 }
@@ -321,6 +432,7 @@ export const publishCommand = cli({
         { name: 'privacy', default: 'public', choices: ['public', 'unlisted', 'private'], help: 'YouTube visibility' },
         { name: 'account', default: '', help: 'Channel/account selector (currently returns unsupported_capability)' },
         { name: 'draft', type: 'bool', default: false, help: 'Save as draft (currently returns unsupported_capability)' },
+        { name: 'timeout', type: 'int', default: DEFAULT_COMMAND_TIMEOUT_SECONDS, help: 'Max seconds for the full YouTube publish flow' },
     ],
     columns: ['ok', 'platform', 'status', 'code', 'capability', 'message', 'url', 'draft'],
     func: async (page, kwargs) => {
@@ -329,6 +441,8 @@ export const publishCommand = cli({
             maxDescriptionLength: 5000,
             validateCover: false,
         });
+        const timeoutSeconds = requirePositiveTimeoutSeconds(kwargs.timeout);
+        const flowDeadlineMs = createFlowDeadline(timeoutSeconds);
         const unsupported = unsupportedForInput(input);
         if (unsupported) return unsupported;
 
@@ -336,14 +450,15 @@ export const publishCommand = cli({
         await page.goto(STUDIO_URL, { waitUntil: 'load', settleMs: 4000 });
         await assertYouTubeLoggedIn(page);
         await openUploadDialog(page);
-        await setFileInput(page, [input.videoPath], FILE_SELECTORS, PLATFORM);
-        await waitForDetailsDialog(page);
+        await setFileInput(page, [input.videoPath], FILE_SELECTORS, PLATFORM, remainingTimeoutMs(flowDeadlineMs));
+        await verifyYouTubeFileSelected(page, input.videoPath);
+        await waitForDetailsDialog(page, flowDeadlineMs);
 
         const description = buildDescriptionWithTags(input.description, input.tags);
         await fillYouTubeDetails(page, input.title, description);
         await goThroughChecks(page, input.privacy);
         await clickPublish(page);
-        const publishResult = await waitForYouTubePublishResult(page, input.privacy);
+        const publishResult = await waitForYouTubePublishResult(page, input.privacy, flowDeadlineMs);
 
         return successResult(PLATFORM, publishResult.message || 'YouTube publish completed', {
             url: publishResult.url || '',
@@ -359,5 +474,11 @@ export const __test__ = {
     goThroughChecks,
     clickAndVerifyYouTubeRadio,
     classifyYouTubePublishState,
+    collectUploadDiagnostics,
+    formatUploadDiagnostics,
+    verifyYouTubeFileSelected,
+    createFlowDeadline,
+    remainingTimeoutMs,
+    waitForDetailsDialog,
     waitForYouTubePublishResult,
 };
