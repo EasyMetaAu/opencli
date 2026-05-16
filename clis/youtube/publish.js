@@ -1,5 +1,5 @@
 import { cli, Strategy } from '@jackwener/opencli/registry';
-import { AuthRequiredError } from '@jackwener/opencli/errors';
+import { ArgumentError, AuthRequiredError } from '@jackwener/opencli/errors';
 import {
     buildDescriptionWithTags,
     PUBLISH_ERROR_CODES,
@@ -22,8 +22,24 @@ const FILE_SELECTORS = [
 ];
 const UPLOAD_TIMEOUT_MS = 240_000;
 const POLL_MS = 1500;
-const DIALOG_TIMEOUT_MS = 60_000;
-const PUBLISH_TIMEOUT_MS = 120_000;
+const DEFAULT_COMMAND_TIMEOUT_SECONDS = 420;
+const DIALOG_TIMEOUT_MS = envTimeoutMs('OPENCLI_YOUTUBE_DIALOG_TIMEOUT', 180_000);
+const PUBLISH_TIMEOUT_MS = envTimeoutMs('OPENCLI_YOUTUBE_PUBLISH_TIMEOUT', 180_000);
+
+function envTimeoutMs(name, fallbackMs) {
+    const raw = process.env[name];
+    if (!raw) return fallbackMs;
+    const parsed = Number(raw);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed * 1000 : fallbackMs;
+}
+
+function requirePositiveTimeoutSeconds(value) {
+    const parsed = Number(value ?? DEFAULT_COMMAND_TIMEOUT_SECONDS);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new ArgumentError('youtube publish --timeout must be a positive integer (seconds)');
+    }
+    return parsed;
+}
 
 function unsupportedForInput(input) {
     if (input.schedule) {
@@ -321,6 +337,7 @@ export const publishCommand = cli({
         { name: 'privacy', default: 'public', choices: ['public', 'unlisted', 'private'], help: 'YouTube visibility' },
         { name: 'account', default: '', help: 'Channel/account selector (currently returns unsupported_capability)' },
         { name: 'draft', type: 'bool', default: false, help: 'Save as draft (currently returns unsupported_capability)' },
+        { name: 'timeout', type: 'int', default: DEFAULT_COMMAND_TIMEOUT_SECONDS, help: 'Max seconds for the full YouTube publish flow' },
     ],
     columns: ['ok', 'platform', 'status', 'code', 'capability', 'message', 'url', 'draft'],
     func: async (page, kwargs) => {
@@ -329,6 +346,7 @@ export const publishCommand = cli({
             maxDescriptionLength: 5000,
             validateCover: false,
         });
+        requirePositiveTimeoutSeconds(kwargs.timeout);
         const unsupported = unsupportedForInput(input);
         if (unsupported) return unsupported;
 
