@@ -27878,6 +27878,13 @@
         "default": false,
         "required": false,
         "help": "Save as draft (currently returns unsupported_capability)"
+      },
+      {
+        "name": "timeout",
+        "type": "int",
+        "default": 420,
+        "required": false,
+        "help": "Max seconds for the full YouTube publish flow"
       }
     ],
     "columns": [
