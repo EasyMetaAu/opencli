@@ -147,8 +147,8 @@ function formatUploadDiagnostics(diagnostics = {}) {
         : 'unknown';
     const text = String(diagnostics.bodyText || '').replace(/\s+/g, ' ').trim().slice(0, 240);
     return [
-        `pageUrl=${diagnostics.pageUrl || 'unknown'}`,
-        `dialogTitle=${diagnostics.dialogTitle || 'unknown'}`,
+        diagnostics.pageUrl ? `pageUrl=${diagnostics.pageUrl}` : '',
+        diagnostics.dialogTitle ? `dialogTitle=${diagnostics.dialogTitle}` : '',
         `pickerVisible=${diagnostics.pickerVisible === true}`,
         `isDetailsReady=${diagnostics.isDetailsReady === true}`,
         `inputs=[${inputs}]`,
