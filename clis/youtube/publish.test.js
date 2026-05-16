@@ -66,12 +66,12 @@ describe('youtube publish adapter', () => {
     it('fails fast with upload diagnostics when setFileInput leaves the picker empty', async () => {
         const page = {
             evaluate: vi.fn().mockResolvedValue({
-                url: 'https://studio.youtube.com/channel/demo',
-                modalTitle: '上传视频',
-                text: '上传视频 将要上传的视频文件拖放到此处 选择文件',
-                filePickerVisible: true,
-                detailsReady: false,
-                fileInputs: [{ count: 0, names: [], accept: '' }],
+                pageUrl: 'https://studio.youtube.com/channel/demo',
+                dialogTitle: '上传视频',
+                bodyText: '上传视频 将要上传的视频文件拖放到此处 选择文件',
+                pickerVisible: true,
+                isDetailsReady: false,
+                inputs: [{ count: 0, names: [], accept: '' }],
             }),
         };
 
@@ -80,7 +80,7 @@ describe('youtube publish adapter', () => {
             message: expect.stringContaining('file input has no selected file'),
         });
         await expect(__test__.verifyYouTubeFileSelected(page, '/tmp/video.mp4')).rejects.toMatchObject({
-            message: expect.stringContaining('filePickerVisible=true'),
+            message: expect.stringContaining('pickerVisible=true'),
         });
     });
 
@@ -88,14 +88,14 @@ describe('youtube publish adapter', () => {
         const page = {
             evaluate: vi.fn(async (script) => {
                 const code = String(script);
-                if (code.includes('fileInputs')) {
+                if (code.includes('inputs')) {
                     return {
-                        url: 'https://studio.youtube.com/channel/demo',
-                        modalTitle: '上传视频',
-                        text: '选择文件',
-                        filePickerVisible: true,
-                        detailsReady: false,
-                        fileInputs: [{ count: 0, names: [] }],
+                        pageUrl: 'https://studio.youtube.com/channel/demo',
+                        dialogTitle: '上传视频',
+                        bodyText: '选择文件',
+                        pickerVisible: true,
+                        isDetailsReady: false,
+                        inputs: [{ count: 0, names: [] }],
                     };
                 }
                 return null;
@@ -105,7 +105,7 @@ describe('youtube publish adapter', () => {
 
         await expect(__test__.waitForDetailsDialog(page, Date.now() - 1)).rejects.toMatchObject({
             code: 'upload_failed',
-            message: expect.stringContaining('fileInputs=[#0:count=0'),
+            message: expect.stringContaining('inputs=[#0:count=0'),
         });
     });
 

@@ -116,20 +116,20 @@ async function collectUploadDiagnostics(page) {
             (() => {
                 const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
                 const textboxes = Array.from(document.querySelectorAll('[contenteditable="true"], textarea, input[type="text"]'));
-                const fileInputs = Array.from(document.querySelectorAll('input[type="file"]')).map((input) => ({
+                const inputs = Array.from(document.querySelectorAll('input[type="file"]')).map((input) => ({
                     count: input.files?.length || 0,
                     names: Array.from(input.files || []).map((file) => file.name).filter(Boolean),
                     accept: input.getAttribute('accept') || '',
                     visible: !!(input.offsetWidth || input.offsetHeight || input.getClientRects().length),
                 }));
                 return {
-                    url: location.href,
-                    title: document.title || '',
-                    modalTitle: document.querySelector('ytcp-uploads-dialog #title, [role="dialog"] #title')?.innerText || '',
-                    text: text.slice(0, 1000),
-                    fileInputs,
-                    filePickerVisible: /select files|选择文件|drag and drop|拖放/i.test(text) || !!document.querySelector('ytcp-uploads-file-picker'),
-                    detailsReady: textboxes.length >= 1 && /details|video details|title|description|详情|标题|说明/i.test(text),
+                    pageUrl: location.href,
+                    pageTitle: document.title || '',
+                    dialogTitle: document.querySelector('ytcp-uploads-dialog #title, [role="dialog"] #title')?.innerText || '',
+                    bodyText: text.slice(0, 1000),
+                    inputs,
+                    pickerVisible: /select files|选择文件|drag and drop|拖放/i.test(text) || !!document.querySelector('ytcp-uploads-file-picker'),
+                    isDetailsReady: textboxes.length >= 1 && /details|video details|title|description|详情|标题|说明/i.test(text),
                 };
             })()
         `);
@@ -139,30 +139,30 @@ async function collectUploadDiagnostics(page) {
 }
 
 function formatUploadDiagnostics(diagnostics = {}) {
-    const inputs = Array.isArray(diagnostics.fileInputs)
-        ? diagnostics.fileInputs.map((input, index) => {
+    const inputs = Array.isArray(diagnostics.inputs)
+        ? diagnostics.inputs.map((input, index) => {
             const names = Array.isArray(input.names) && input.names.length ? input.names.join('|') : 'none';
             return `#${index}:count=${input.count || 0},names=${names},accept=${input.accept || 'none'}`;
         }).join('; ')
         : 'unknown';
-    const text = String(diagnostics.text || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+    const text = String(diagnostics.bodyText || '').replace(/\s+/g, ' ').trim().slice(0, 240);
     return [
-        `url=${diagnostics.url || 'unknown'}`,
-        `modalTitle=${diagnostics.modalTitle || 'unknown'}`,
-        `filePickerVisible=${diagnostics.filePickerVisible === true}`,
-        `detailsReady=${diagnostics.detailsReady === true}`,
-        `fileInputs=[${inputs}]`,
+        `pageUrl=${diagnostics.pageUrl || 'unknown'}`,
+        `dialogTitle=${diagnostics.dialogTitle || 'unknown'}`,
+        `pickerVisible=${diagnostics.pickerVisible === true}`,
+        `isDetailsReady=${diagnostics.isDetailsReady === true}`,
+        `inputs=[${inputs}]`,
         diagnostics.diagnosticError ? `diagnosticError=${diagnostics.diagnosticError}` : '',
-        text ? `text="${text}"` : '',
+        text ? `bodyText="${text}"` : '',
     ].filter(Boolean).join('; ');
 }
 
 async function verifyYouTubeFileSelected(page, expectedPath) {
     const diagnostics = await collectUploadDiagnostics(page);
-    if (diagnostics?.detailsReady) return diagnostics;
+    if (diagnostics?.isDetailsReady) return diagnostics;
 
-    const selectedInputs = Array.isArray(diagnostics?.fileInputs)
-        ? diagnostics.fileInputs.filter((input) => Number(input.count) > 0)
+    const selectedInputs = Array.isArray(diagnostics?.inputs)
+        ? diagnostics.inputs.filter((input) => Number(input.count) > 0)
         : [];
     if (selectedInputs.length === 0) {
         throwPublishFailure(
