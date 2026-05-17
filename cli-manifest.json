@@ -1821,7 +1821,7 @@
         "type": "int",
         "default": 10,
         "required": false,
-        "help": "Number of near-the-money strikes per type"
+        "help": "Number of near-the-money strikes per type (1-100)"
       }
     ],
     "columns": [
@@ -2462,6 +2462,32 @@
     "modulePath": "bilibili/subtitle.js",
     "sourceFile": "bilibili/subtitle.js",
     "navigateBefore": true
+  },
+  {
+    "site": "bilibili",
+    "name": "summary",
+    "description": "获取 B站视频的官方 AI 总结（视频页「AI总结」同款，含分段大纲与时间戳）",
+    "access": "read",
+    "domain": "www.bilibili.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "bvid",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Video BV ID / URL / b23.tv short link"
+      }
+    ],
+    "columns": [
+      "time",
+      "content"
+    ],
+    "type": "js",
+    "modulePath": "bilibili/summary.js",
+    "sourceFile": "bilibili/summary.js",
+    "navigateBefore": "https://www.bilibili.com"
   },
   {
     "site": "bilibili",
@@ -3484,7 +3510,7 @@
   {
     "site": "boss",
     "name": "chatlist",
-    "description": "BOSS直聘查看聊天列表（招聘端）",
+    "description": "BOSS直聘查看聊天列表（招聘端/求职端）",
     "access": "read",
     "domain": "www.zhipin.com",
     "strategy": "cookie",
@@ -3509,12 +3535,26 @@
         "type": "str",
         "default": "0",
         "required": false,
-        "help": "Filter by job ID (0=all)"
+        "help": "Filter by job ID (0=all, boss side only)"
+      },
+      {
+        "name": "side",
+        "type": "str",
+        "default": "auto",
+        "required": false,
+        "help": "Identity side: auto (default), boss (recruiter), or geek (job-seeker)",
+        "choices": [
+          "auto",
+          "boss",
+          "geek"
+        ]
       }
     ],
     "columns": [
       "name",
+      "company",
       "job",
+      "title",
       "last_msg",
       "last_time",
       "uid",
@@ -3528,7 +3568,7 @@
   {
     "site": "boss",
     "name": "chatmsg",
-    "description": "BOSS直聘查看与候选人的聊天消息",
+    "description": "BOSS直聘查看聊天消息历史（招聘端/求职端）",
     "access": "read",
     "domain": "www.zhipin.com",
     "strategy": "cookie",
@@ -3547,6 +3587,18 @@
         "default": 1,
         "required": false,
         "help": "Page number"
+      },
+      {
+        "name": "side",
+        "type": "str",
+        "default": "auto",
+        "required": false,
+        "help": "Identity side: auto (default), boss (recruiter), or geek (job-seeker)",
+        "choices": [
+          "auto",
+          "boss",
+          "geek"
+        ]
       }
     ],
     "columns": [
@@ -4008,6 +4060,47 @@
     "modulePath": "boss/stats.js",
     "sourceFile": "boss/stats.js",
     "navigateBefore": false
+  },
+  {
+    "site": "brave",
+    "name": "search",
+    "description": "Search Brave Search",
+    "access": "read",
+    "domain": "search.brave.com",
+    "strategy": "public",
+    "browser": true,
+    "args": [
+      {
+        "name": "keyword",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Search query"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 10,
+        "required": false,
+        "help": "Number of results per page (max 18)"
+      },
+      {
+        "name": "offset",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Page offset (0, 1, 2...). Brave returns ~18 results per page"
+      }
+    ],
+    "columns": [
+      "rank",
+      "title",
+      "url",
+      "snippet"
+    ],
+    "type": "js",
+    "modulePath": "brave/search.js",
+    "sourceFile": "brave/search.js"
   },
   {
     "site": "chaoxing",
@@ -8706,6 +8799,93 @@
     "navigateBefore": "https://creator.douyin.com"
   },
   {
+    "site": "duckduckgo",
+    "name": "search",
+    "description": "Search DuckDuckGo",
+    "access": "read",
+    "domain": "html.duckduckgo.com",
+    "strategy": "public",
+    "browser": true,
+    "args": [
+      {
+        "name": "keyword",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Search query"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 10,
+        "required": false,
+        "help": "Number of results per page (1-10). For multi-page, use --offset"
+      },
+      {
+        "name": "offset",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Result offset for pagination (0, 10, 20...). Uses XHR POST internally"
+      },
+      {
+        "name": "region",
+        "type": "str",
+        "required": false,
+        "help": "Region code (e.g. jp-jp, us-en, cn-zh). Default: all regions"
+      },
+      {
+        "name": "time",
+        "type": "str",
+        "required": false,
+        "help": "Time range: d (day), w (week), m (month), y (year)"
+      }
+    ],
+    "columns": [
+      "rank",
+      "title",
+      "url",
+      "snippet",
+      "displayUrl",
+      "icon",
+      "resultType"
+    ],
+    "type": "js",
+    "modulePath": "duckduckgo/search.js",
+    "sourceFile": "duckduckgo/search.js"
+  },
+  {
+    "site": "duckduckgo",
+    "name": "suggest",
+    "description": "DuckDuckGo search suggestions",
+    "access": "read",
+    "domain": "duckduckgo.com",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "keyword",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Search query prefix"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 8,
+        "required": false,
+        "help": "Max number of suggestions"
+      }
+    ],
+    "columns": [
+      "phrase"
+    ],
+    "type": "js",
+    "modulePath": "duckduckgo/suggest.js",
+    "sourceFile": "duckduckgo/suggest.js"
+  },
+  {
     "site": "eastmoney",
     "name": "announcement",
     "description": "上市公司公告（按交易所筛选）",
@@ -9388,7 +9568,7 @@
     "type": "js",
     "modulePath": "facebook/feed.js",
     "sourceFile": "facebook/feed.js",
-    "navigateBefore": "https://www.facebook.com"
+    "navigateBefore": false
   },
   {
     "site": "facebook",
@@ -9733,6 +9913,50 @@
     "type": "js",
     "modulePath": "flathub/search.js",
     "sourceFile": "flathub/search.js"
+  },
+  {
+    "site": "flomo",
+    "name": "memos",
+    "description": "List your Flomo memos",
+    "access": "read",
+    "domain": "flomoapp.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Number of memos to fetch (1-200)"
+      },
+      {
+        "name": "since",
+        "type": "int",
+        "required": false,
+        "help": "Only memos updated after this Unix timestamp in seconds"
+      },
+      {
+        "name": "slug",
+        "type": "str",
+        "required": false,
+        "help": "Pagination cursor from a previous memo page"
+      }
+    ],
+    "columns": [
+      "id",
+      "url",
+      "content",
+      "slug",
+      "tags",
+      "images",
+      "created_at",
+      "updated_at"
+    ],
+    "type": "js",
+    "modulePath": "flomo/memos.js",
+    "sourceFile": "flomo/memos.js",
+    "navigateBefore": "https://v.flomoapp.com/"
   },
   {
     "site": "gemini",
@@ -14147,6 +14371,162 @@
   },
   {
     "site": "linkedin",
+    "name": "connect",
+    "description": "Fail-closed LinkedIn connection request sender that verifies the exact profile before optionally sending a note",
+    "access": "write",
+    "domain": "www.linkedin.com",
+    "strategy": "ui",
+    "browser": true,
+    "args": [
+      {
+        "name": "profile-url",
+        "type": "string",
+        "required": true,
+        "positional": true,
+        "help": "Exact LinkedIn profile URL to open and verify"
+      },
+      {
+        "name": "expected-name",
+        "type": "string",
+        "required": true,
+        "help": "Expected visible profile name"
+      },
+      {
+        "name": "note",
+        "type": "string",
+        "default": "",
+        "required": false,
+        "help": "Optional connection note, max 300 chars"
+      },
+      {
+        "name": "send",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Actually click Send. Default is dry-run verification only."
+      }
+    ],
+    "columns": [
+      "status",
+      "recipient",
+      "reason",
+      "profile_url",
+      "note_chars"
+    ],
+    "type": "js",
+    "modulePath": "linkedin/connect.js",
+    "sourceFile": "linkedin/connect.js",
+    "navigateBefore": true
+  },
+  {
+    "site": "linkedin",
+    "name": "inbox",
+    "description": "List LinkedIn messaging inbox conversations and unread messages",
+    "access": "read",
+    "domain": "www.linkedin.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 40,
+        "required": false,
+        "help": "Maximum conversations to return (1-100)"
+      },
+      {
+        "name": "unread-only",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Return only conversations with unread messages"
+      }
+    ],
+    "columns": [
+      "rank",
+      "thread_url",
+      "thread_id",
+      "person_name",
+      "last_message_preview",
+      "unread",
+      "counterparty_type",
+      "category",
+      "timestamp"
+    ],
+    "type": "js",
+    "modulePath": "linkedin/inbox.js",
+    "sourceFile": "linkedin/inbox.js",
+    "navigateBefore": "https://www.linkedin.com"
+  },
+  {
+    "site": "linkedin",
+    "name": "safe-send",
+    "description": "Fail-closed LinkedIn message sender that verifies exact thread, recipient, and latest message before filling/sending",
+    "access": "write",
+    "domain": "www.linkedin.com",
+    "strategy": "ui",
+    "browser": true,
+    "args": [
+      {
+        "name": "thread-url",
+        "type": "str",
+        "required": true,
+        "help": "Exact LinkedIn messaging thread URL to open and verify"
+      },
+      {
+        "name": "expected-name",
+        "type": "str",
+        "required": true,
+        "help": "Expected visible recipient name in the active thread header"
+      },
+      {
+        "name": "message",
+        "type": "str",
+        "required": true,
+        "help": "Message body to send or dry-run"
+      },
+      {
+        "name": "expected-last-text",
+        "type": "str",
+        "required": false,
+        "help": "Substring expected in the currently visible latest conversation context"
+      },
+      {
+        "name": "expected-last-hash",
+        "type": "str",
+        "required": false,
+        "help": "SHA-256 hash of expected latest visible message text"
+      },
+      {
+        "name": "send",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Actually click Send. Default is dry-run verification only."
+      },
+      {
+        "name": "screenshot",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Capture a screenshot during verification"
+      }
+    ],
+    "columns": [
+      "status",
+      "recipient",
+      "reason",
+      "thread_url",
+      "message_chars",
+      "screenshot"
+    ],
+    "type": "js",
+    "modulePath": "linkedin/safe-send.js",
+    "sourceFile": "linkedin/safe-send.js",
+    "navigateBefore": true
+  },
+  {
+    "site": "linkedin",
     "name": "search",
     "description": "Search LinkedIn jobs",
     "access": "read",
@@ -14232,6 +14612,48 @@
     "modulePath": "linkedin/search.js",
     "sourceFile": "linkedin/search.js",
     "navigateBefore": "https://www.linkedin.com"
+  },
+  {
+    "site": "linkedin",
+    "name": "thread-snapshot",
+    "description": "Load a LinkedIn messaging thread, scroll for available history, and return a full context snapshot",
+    "access": "read",
+    "domain": "www.linkedin.com",
+    "strategy": "ui",
+    "browser": true,
+    "args": [
+      {
+        "name": "thread-url",
+        "type": "str",
+        "required": true,
+        "help": "Exact LinkedIn messaging thread URL to open and snapshot"
+      },
+      {
+        "name": "max-scrolls",
+        "type": "number",
+        "default": 30,
+        "required": false,
+        "help": "Maximum upward scroll attempts to load older messages"
+      },
+      {
+        "name": "json",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Return only JSON snapshot string in the snapshot_json field"
+      }
+    ],
+    "columns": [
+      "thread_url",
+      "recipient",
+      "message_count",
+      "latest_text",
+      "snapshot_json"
+    ],
+    "type": "js",
+    "modulePath": "linkedin/thread-snapshot.js",
+    "sourceFile": "linkedin/thread-snapshot.js",
+    "navigateBefore": true
   },
   {
     "site": "linkedin",
@@ -15753,181 +16175,6 @@
     "modulePath": "notebooklm/summary.js",
     "sourceFile": "notebooklm/summary.js",
     "navigateBefore": false
-  },
-  {
-    "site": "notion",
-    "name": "export",
-    "description": "Export the current Notion page as Markdown",
-    "access": "read",
-    "domain": "localhost",
-    "strategy": "ui",
-    "browser": true,
-    "args": [
-      {
-        "name": "output",
-        "type": "str",
-        "required": false,
-        "help": "Output file (default: /tmp/notion-export.md)"
-      }
-    ],
-    "columns": [
-      "Status",
-      "File"
-    ],
-    "type": "js",
-    "modulePath": "notion/export.js",
-    "sourceFile": "notion/export.js",
-    "navigateBefore": true
-  },
-  {
-    "site": "notion",
-    "name": "favorites",
-    "description": "List pages from the Notion Favorites section in the sidebar",
-    "access": "read",
-    "domain": "localhost",
-    "strategy": "ui",
-    "browser": true,
-    "args": [],
-    "columns": [
-      "Index",
-      "Title",
-      "Icon"
-    ],
-    "type": "js",
-    "modulePath": "notion/favorites.js",
-    "sourceFile": "notion/favorites.js",
-    "navigateBefore": true
-  },
-  {
-    "site": "notion",
-    "name": "new",
-    "description": "Create a new page in Notion",
-    "access": "write",
-    "domain": "localhost",
-    "strategy": "ui",
-    "browser": true,
-    "args": [
-      {
-        "name": "title",
-        "type": "str",
-        "required": false,
-        "positional": true,
-        "help": "Page title (optional)"
-      }
-    ],
-    "columns": [
-      "Status"
-    ],
-    "type": "js",
-    "modulePath": "notion/new.js",
-    "sourceFile": "notion/new.js",
-    "navigateBefore": true
-  },
-  {
-    "site": "notion",
-    "name": "read",
-    "description": "Read the content of the currently open Notion page",
-    "access": "read",
-    "domain": "localhost",
-    "strategy": "ui",
-    "browser": true,
-    "args": [],
-    "columns": [
-      "Title",
-      "Content"
-    ],
-    "type": "js",
-    "modulePath": "notion/read.js",
-    "sourceFile": "notion/read.js",
-    "navigateBefore": true
-  },
-  {
-    "site": "notion",
-    "name": "search",
-    "description": "Search pages and databases in Notion via Quick Find (Cmd+P)",
-    "access": "read",
-    "domain": "localhost",
-    "strategy": "ui",
-    "browser": true,
-    "args": [
-      {
-        "name": "query",
-        "type": "str",
-        "required": true,
-        "positional": true,
-        "help": "Search query"
-      }
-    ],
-    "columns": [
-      "Index",
-      "Title"
-    ],
-    "type": "js",
-    "modulePath": "notion/search.js",
-    "sourceFile": "notion/search.js",
-    "navigateBefore": true
-  },
-  {
-    "site": "notion",
-    "name": "sidebar",
-    "description": "List pages and databases from the Notion sidebar",
-    "access": "read",
-    "domain": "localhost",
-    "strategy": "ui",
-    "browser": true,
-    "args": [],
-    "columns": [
-      "Index",
-      "Title"
-    ],
-    "type": "js",
-    "modulePath": "notion/sidebar.js",
-    "sourceFile": "notion/sidebar.js",
-    "navigateBefore": true
-  },
-  {
-    "site": "notion",
-    "name": "status",
-    "description": "Check active CDP connection to Notion Desktop",
-    "access": "read",
-    "domain": "localhost",
-    "strategy": "ui",
-    "browser": true,
-    "args": [],
-    "columns": [
-      "Status",
-      "Url",
-      "Title"
-    ],
-    "type": "js",
-    "modulePath": "notion/status.js",
-    "sourceFile": "notion/status.js",
-    "navigateBefore": true
-  },
-  {
-    "site": "notion",
-    "name": "write",
-    "description": "Append text content to the currently open Notion page",
-    "access": "write",
-    "domain": "localhost",
-    "strategy": "ui",
-    "browser": true,
-    "args": [
-      {
-        "name": "text",
-        "type": "str",
-        "required": true,
-        "positional": true,
-        "help": "Text to append to the page"
-      }
-    ],
-    "columns": [
-      "Status"
-    ],
-    "type": "js",
-    "modulePath": "notion/write.js",
-    "sourceFile": "notion/write.js",
-    "navigateBefore": true
   },
   {
     "site": "nowcoder",
@@ -19166,8 +19413,7 @@
     "type": "js",
     "modulePath": "reddit/comment.js",
     "sourceFile": "reddit/comment.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "reddit",
@@ -19197,8 +19443,7 @@
     "type": "js",
     "modulePath": "reddit/frontpage.js",
     "sourceFile": "reddit/frontpage.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "reddit",
@@ -19230,8 +19475,7 @@
     "type": "js",
     "modulePath": "reddit/home.js",
     "sourceFile": "reddit/home.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "reddit",
@@ -19300,8 +19544,7 @@
     "type": "js",
     "modulePath": "reddit/popular.js",
     "sourceFile": "reddit/popular.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "reddit",
@@ -19378,8 +19621,7 @@
     "type": "js",
     "modulePath": "reddit/read.js",
     "sourceFile": "reddit/read.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "reddit",
@@ -19445,8 +19687,7 @@
     "type": "js",
     "modulePath": "reddit/save.js",
     "sourceFile": "reddit/save.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "reddit",
@@ -19475,8 +19716,7 @@
     "type": "js",
     "modulePath": "reddit/saved.js",
     "sourceFile": "reddit/saved.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "reddit",
@@ -19534,8 +19774,7 @@
     "type": "js",
     "modulePath": "reddit/search.js",
     "sourceFile": "reddit/search.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "reddit",
@@ -19585,8 +19824,7 @@
     "type": "js",
     "modulePath": "reddit/subreddit.js",
     "sourceFile": "reddit/subreddit.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "reddit",
@@ -19612,8 +19850,7 @@
     "type": "js",
     "modulePath": "reddit/subreddit-info.js",
     "sourceFile": "reddit/subreddit-info.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "reddit",
@@ -19646,8 +19883,7 @@
     "type": "js",
     "modulePath": "reddit/subscribe.js",
     "sourceFile": "reddit/subscribe.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "reddit",
@@ -19680,8 +19916,7 @@
     "type": "js",
     "modulePath": "reddit/upvote.js",
     "sourceFile": "reddit/upvote.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "reddit",
@@ -19710,8 +19945,7 @@
     "type": "js",
     "modulePath": "reddit/upvoted.js",
     "sourceFile": "reddit/upvoted.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "reddit",
@@ -19737,8 +19971,7 @@
     "type": "js",
     "modulePath": "reddit/user.js",
     "sourceFile": "reddit/user.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "reddit",
@@ -19773,8 +20006,7 @@
     "type": "js",
     "modulePath": "reddit/user-comments.js",
     "sourceFile": "reddit/user-comments.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "reddit",
@@ -19810,8 +20042,7 @@
     "type": "js",
     "modulePath": "reddit/user-posts.js",
     "sourceFile": "reddit/user-posts.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "reddit",
@@ -19829,8 +20060,7 @@
     "type": "js",
     "modulePath": "reddit/whoami.js",
     "sourceFile": "reddit/whoami.js",
-    "navigateBefore": "https://reddit.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://reddit.com"
   },
   {
     "site": "rednote",
@@ -22710,8 +22940,7 @@
     "type": "js",
     "modulePath": "twitter/article.js",
     "sourceFile": "twitter/article.js",
-    "navigateBefore": "https://x.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://x.com"
   },
   {
     "site": "twitter",
@@ -22804,13 +23033,14 @@
       "retweets",
       "bookmarks",
       "created_at",
-      "url"
+      "url",
+      "has_media",
+      "media_urls"
     ],
     "type": "js",
     "modulePath": "twitter/bookmark-folder.js",
     "sourceFile": "twitter/bookmark-folder.js",
-    "navigateBefore": "https://x.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://x.com"
   },
   {
     "site": "twitter",
@@ -22830,8 +23060,7 @@
     "type": "js",
     "modulePath": "twitter/bookmark-folders.js",
     "sourceFile": "twitter/bookmark-folders.js",
-    "navigateBefore": "https://x.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://x.com"
   },
   {
     "site": "twitter",
@@ -22865,13 +23094,14 @@
       "retweets",
       "bookmarks",
       "created_at",
-      "url"
+      "url",
+      "has_media",
+      "media_urls"
     ],
     "type": "js",
     "modulePath": "twitter/bookmarks.js",
     "sourceFile": "twitter/bookmarks.js",
-    "navigateBefore": "https://x.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://x.com"
   },
   {
     "site": "twitter",
@@ -22945,8 +23175,7 @@
     "type": "js",
     "modulePath": "twitter/download.js",
     "sourceFile": "twitter/download.js",
-    "navigateBefore": "https://x.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://x.com"
   },
   {
     "site": "twitter",
@@ -23006,8 +23235,7 @@
     "type": "js",
     "modulePath": "twitter/followers.js",
     "sourceFile": "twitter/followers.js",
-    "navigateBefore": true,
-    "siteSession": "persistent"
+    "navigateBefore": true
   },
   {
     "site": "twitter",
@@ -23042,8 +23270,7 @@
     "type": "js",
     "modulePath": "twitter/following.js",
     "sourceFile": "twitter/following.js",
-    "navigateBefore": "https://x.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://x.com"
   },
   {
     "site": "twitter",
@@ -23143,8 +23370,7 @@
     "type": "js",
     "modulePath": "twitter/likes.js",
     "sourceFile": "twitter/likes.js",
-    "navigateBefore": "https://x.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://x.com"
   },
   {
     "site": "twitter",
@@ -23264,8 +23490,7 @@
     "type": "js",
     "modulePath": "twitter/list-tweets.js",
     "sourceFile": "twitter/list-tweets.js",
-    "navigateBefore": "https://x.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://x.com"
   },
   {
     "site": "twitter",
@@ -23294,8 +23519,7 @@
     "type": "js",
     "modulePath": "twitter/lists.js",
     "sourceFile": "twitter/lists.js",
-    "navigateBefore": "https://x.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://x.com"
   },
   {
     "site": "twitter",
@@ -23324,8 +23548,7 @@
     "type": "js",
     "modulePath": "twitter/notifications.js",
     "sourceFile": "twitter/notifications.js",
-    "navigateBefore": true,
-    "siteSession": "persistent"
+    "navigateBefore": true
   },
   {
     "site": "twitter",
@@ -23395,8 +23618,7 @@
     "type": "js",
     "modulePath": "twitter/profile.js",
     "sourceFile": "twitter/profile.js",
-    "navigateBefore": "https://x.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://x.com"
   },
   {
     "site": "twitter",
@@ -23665,8 +23887,7 @@
     "type": "js",
     "modulePath": "twitter/search.js",
     "sourceFile": "twitter/search.js",
-    "navigateBefore": "https://x.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://x.com"
   },
   {
     "site": "twitter",
@@ -23712,8 +23933,7 @@
     "type": "js",
     "modulePath": "twitter/thread.js",
     "sourceFile": "twitter/thread.js",
-    "navigateBefore": "https://x.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://x.com"
   },
   {
     "site": "twitter",
@@ -23766,8 +23986,7 @@
     "type": "js",
     "modulePath": "twitter/timeline.js",
     "sourceFile": "twitter/timeline.js",
-    "navigateBefore": "https://x.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://x.com"
   },
   {
     "site": "twitter",
@@ -23794,8 +24013,7 @@
     "type": "js",
     "modulePath": "twitter/trending.js",
     "sourceFile": "twitter/trending.js",
-    "navigateBefore": "https://x.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://x.com"
   },
   {
     "site": "twitter",
@@ -23845,8 +24063,7 @@
     "type": "js",
     "modulePath": "twitter/tweets.js",
     "sourceFile": "twitter/tweets.js",
-    "navigateBefore": "https://x.com",
-    "siteSession": "persistent"
+    "navigateBefore": "https://x.com"
   },
   {
     "site": "twitter",
@@ -24825,6 +25042,68 @@
     "type": "js",
     "modulePath": "weibo/user.js",
     "sourceFile": "weibo/user.js",
+    "navigateBefore": "https://weibo.com"
+  },
+  {
+    "site": "weibo",
+    "name": "user-posts",
+    "description": "List Weibo posts from a user, optionally filtered by date range",
+    "access": "read",
+    "domain": "weibo.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "id",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "User ID (numeric uid) or screen name"
+      },
+      {
+        "name": "start",
+        "type": "str",
+        "required": false,
+        "help": "Start date in Asia/Shanghai (YYYY-MM-DD)"
+      },
+      {
+        "name": "end",
+        "type": "str",
+        "required": false,
+        "help": "End date in Asia/Shanghai (YYYY-MM-DD)"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Number of posts (1-100)"
+      },
+      {
+        "name": "include-retweets",
+        "type": "boolean",
+        "default": false,
+        "required": false,
+        "help": "Include retweets"
+      }
+    ],
+    "columns": [
+      "rank",
+      "id",
+      "mblogid",
+      "author",
+      "uid",
+      "text",
+      "time",
+      "reposts",
+      "comments",
+      "likes",
+      "pic_count",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "weibo/user-posts.js",
+    "sourceFile": "weibo/user-posts.js",
     "navigateBefore": "https://weibo.com"
   },
   {
@@ -26964,6 +27243,47 @@
     "navigateBefore": "https://xueqiu.com"
   },
   {
+    "site": "yahoo",
+    "name": "search",
+    "description": "Search Yahoo (powered by Bing)",
+    "access": "read",
+    "domain": "search.yahoo.com",
+    "strategy": "public",
+    "browser": true,
+    "args": [
+      {
+        "name": "keyword",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Search query"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 7,
+        "required": false,
+        "help": "Number of results per page (max 7)"
+      },
+      {
+        "name": "page",
+        "type": "int",
+        "default": 1,
+        "required": false,
+        "help": "Page number (1, 2, 3...). Yahoo returns ~7 results per page"
+      }
+    ],
+    "columns": [
+      "rank",
+      "title",
+      "url",
+      "snippet"
+    ],
+    "type": "js",
+    "modulePath": "yahoo/search.js",
+    "sourceFile": "yahoo/search.js"
+  },
+  {
     "site": "yahoo-finance",
     "name": "quote",
     "description": "Yahoo Finance 股票行情",
@@ -27599,6 +27919,36 @@
     "modulePath": "yollomi/video.js",
     "sourceFile": "yollomi/video.js",
     "navigateBefore": "https://yollomi.com"
+  },
+  {
+    "site": "youdao",
+    "name": "note",
+    "description": "Read a public shared Youdao Note",
+    "access": "read",
+    "domain": "share.note.youdao.com",
+    "strategy": "public",
+    "browser": true,
+    "args": [
+      {
+        "name": "url",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Full share URL of the Youdao Note"
+      }
+    ],
+    "columns": [
+      "title",
+      "content",
+      "summary",
+      "keywords",
+      "created_at",
+      "file_size",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "youdao/note.js",
+    "sourceFile": "youdao/note.js"
   },
   {
     "site": "youtube",

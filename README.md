@@ -1,7 +1,8 @@
 # OpenCLI
 
-> **Turn websites, browser sessions, Electron apps, and local tools into deterministic interfaces for humans and AI agents.**
-> Reuse your logged-in browser, automate live workflows, and crystallize repeated actions into reusable CLI commands.
+> **Convert any website into a CLI & Drive your logged-in browser from AI agents.**
+> Turn websites, browser sessions, Electron apps, and local tools into deterministic interfaces for humans and AI agents.
+> Or drive your logged-in browser to do anything — navigate, fill forms, click, extract, automate.
 
 [![中文文档](https://img.shields.io/badge/docs-%E4%B8%AD%E6%96%87-0F766E?style=flat-square)](./README.zh-CN.md)
 [![npm](https://img.shields.io/npm/v/@jackwener/opencli?style=flat-square)](https://www.npmjs.com/package/@jackwener/opencli)
@@ -14,19 +15,15 @@ OpenCLI gives you one surface for three different kinds of automation:
 - **Let AI Agents operate any website** — install the `opencli-adapter-author` skill in your AI agent (Claude Code, Cursor, etc.), and it can navigate, click, type/fill, extract, and inspect any page through your logged-in browser via `opencli browser` primitives.
 - **Write new adapters** end-to-end with `opencli browser` + the `opencli-adapter-author` skill, which guides from first recon through field decoding, code, and `opencli browser verify`.
 
-It also works as a **CLI hub** for local tools such as `gh`, `docker`, `tg`, `discord`, `wx`, and other binaries you register yourself, plus **desktop app adapters** for Electron apps like Cursor, Codex, Antigravity, ChatGPT, and Notion.
+It also works as a **CLI hub** for local tools such as `gh`, `docker`, `longbridge`, `tg`, `discord`, `wx`, `ntn` (Notion), and other binaries you register yourself, plus **desktop app adapters** for Electron apps like Cursor, Codex, Antigravity, and ChatGPT.
 
 ## Highlights
 
-- **Desktop App Control** — Drive Electron apps (Cursor, Codex, ChatGPT, Notion, etc.) directly from the terminal via CDP.
-- **Browser Automation for AI Agents** — Install the `opencli-adapter-author` skill, and your AI agent can operate any website: navigate, click, type/fill, extract, screenshot — all through your logged-in Chrome session.
-- **Multi-profile Browser Bridge** — Install the extension in each Chrome profile you want to use, then route commands with `--profile`, `OPENCLI_PROFILE`, or `opencli profile use`.
-- **Website → CLI** — Turn any website into a deterministic CLI: 100+ site surfaces are already registered, or write your own with the `opencli-adapter-author` skill + `opencli browser verify`.
-- **Account-safe** — Reuses Chrome/Chromium logged-in state; your credentials never leave the browser.
-- **AI Agent ready** — One skill takes you from site recon through API discovery, field decoding, adapter writing, and verification.
-- **CLI Hub** — Discover, auto-install, and passthrough commands to any external CLI (gh, docker, obsidian, tg, discord, wx, etc).
-- **Zero LLM cost** — No tokens consumed at runtime. Run 10,000 times and pay nothing.
-- **Deterministic** — Same command, same output schema, every time. Pipeable, scriptable, CI-friendly.
+- **Live Browser Automation** — Drive your logged-in Chrome from AI agents: navigate, fill forms, click, extract. Credentials stay in the browser.
+- **Desktop App Control** — Drive Electron apps (Cursor, Codex, ChatGPT) directly via CDP.
+- **Multi-profile Browser Bridge** — Route commands to specific Chrome profiles via `--profile` or `OPENCLI_PROFILE`.
+- **100+ adapters + CLI Hub** — Built-in site commands (bilibili / xiaohongshu / twitter / hackernews / ...) plus external CLI passthrough (`gh`, `docker`, `ntn`, `longbridge`).
+- **Zero LLM cost at runtime** — Deterministic output, no tokens consumed.
 
 ---
 
@@ -127,7 +124,7 @@ npx skills add jackwener/opencli --skill smart-search
 |-------|------------|-------------------------------|
 | **opencli-adapter-author** | Operate a site in real time, or write a reusable adapter for a new site | "Help me check my Xiaohongshu notifications" / "Write an adapter for douyin trending" / "Make a command that grabs the top posts from this page" |
 | **opencli-autofix** | Repair a broken adapter when a built-in command fails | "`opencli zhihu hot` is returning empty — fix it" |
-| **opencli-browser** | Browser automation reference for AI agents | "Use browser commands to scrape this page" |
+| **opencli-browser** | Browser automation reference for AI agents | "Help me fill out this form" / "Use browser commands to scrape this page" |
 | **opencli-usage** | Quick reference for all OpenCLI commands and sites | "What commands does OpenCLI have for Twitter?" |
 | **smart-search** | Search across existing OpenCLI capabilities | "Find me a Bilibili trending adapter" |
 
@@ -250,7 +247,7 @@ To load the source Browser Bridge extension:
 |------|----------|
 | **xiaohongshu** | `search` `note` `comments` `feed` `user` `download` `publish` `notifications` `creator-notes` `creator-notes-summary` `creator-note-detail` `creator-profile` `creator-stats` |
 | **rednote** | `search` `note` `comments` `user` `download` `feed` `notifications` |
-| **bilibili** | `hot` `search` `history` `feed` `ranking` `download` `comments` `dynamic` `favorite` `following` `me` `subtitle` `video` `user-videos` |
+| **bilibili** | `hot` `search` `history` `feed` `ranking` `download` `comments` `dynamic` `favorite` `following` `me` `subtitle` `summary` `video` `user-videos` |
 | **tieba** | `hot` `posts` `search` `read` |
 | **hupu** | `hot` `search` `detail` `mentions` `reply` `like` `unlike` |
 | **twitter** | `trending` `search` `timeline` `tweets` `lists` `list-tweets` `list-add` `list-remove` `bookmarks` `post` `download` `profile` `article` `like` `likes` `notifications` `reply` `reply-dm` `thread` `follow` `unfollow` `followers` `following` `block` `unblock` `bookmark` `unbookmark` `delete` `hide-reply` `accept` |
@@ -276,6 +273,7 @@ To load the source Browser Bridge extension:
 | **wanfang** | `search` |
 | **hackernews** | `top` `new` `best` `ask` `show` `jobs` `search` `user` |
 | **xiaoyuzhou** | `auth*` `podcast*` `podcast-episodes*` `episode*` `download*` `transcript*` |
+| **youdao** | `note` |
 
 100+ site surfaces in total — **[→ see all supported sites & commands](./docs/adapters/index.md)**
 
@@ -283,19 +281,21 @@ To load the source Browser Bridge extension:
 
 ## CLI Hub
 
-OpenCLI acts as a universal hub for your existing command-line tools — unified discovery, pure passthrough execution, and auto-install (if a tool isn't installed, OpenCLI runs `brew install <tool>` automatically before re-running the command).
+OpenCLI acts as a universal hub for your existing command-line tools — unified discovery, pure passthrough execution, and auto-install when a safe package-manager command is configured.
 
 | External CLI | Description | Example |
 |--------------|-------------|---------|
 | **gh** | GitHub CLI | `opencli gh pr list --limit 5` |
 | **obsidian** | Obsidian vault management | `opencli obsidian search query="AI"` |
 | **docker** | Docker | `opencli docker ps` |
+| **longbridge** | Longbridge CLI — market data, account management, and trading via Longbridge OpenAPI | `opencli longbridge quote TSLA.US --format json` |
+| **ntn** | Notion CLI — official Notion API CLI for pages, databases, blocks, search, comments | `opencli ntn pages list` |
 | **lark-cli** | Lark/Feishu — messages, docs, calendar, tasks, 200+ commands | `opencli lark-cli calendar +agenda` |
 | **dws** | DingTalk — cross-platform CLI for DingTalk's full suite, designed for humans and AI agents | `opencli dws msg send --to user "hello"` |
 | **wecom-cli** | WeCom/企业微信 — CLI for WeCom open platform, for humans and AI agents | `opencli wecom-cli msg send --to user "hello"` |
-| **tg** | Telegram — local-first sync, search, and export via MTProto for AI agents | `opencli tg search "AI news" -f json` |
-| **discord** | Discord — local-first sync, search, and export via SQLite for AI agents | `opencli discord recent --channel general` |
-| **wx** | WeChat — query local WeChat data: sessions, messages, search, contacts, export | `opencli wx search "OpenCLI"` |
+| **tg(tg-cli)** | Telegram — local-first sync, search, and export via MTProto for AI agents | `opencli tg search "AI news" -f json` |
+| **discord(discord-cli)** | Discord — local-first sync, search, and export via SQLite for AI agents | `opencli discord recent --channel general` |
+| **wx(wx-cli)** | WeChat — query local WeChat data: sessions, messages, search, contacts, export | `opencli wx search "OpenCLI"` |
 | **vercel** | Vercel — deploy projects, manage domains, env vars, logs | `opencli vercel deploy --prod` |
 
 **Register your own** — add any local CLI so AI agents can discover it via `opencli list`:
@@ -303,6 +303,8 @@ OpenCLI acts as a universal hub for your existing command-line tools — unified
 ```bash
 opencli external register mycli
 ```
+
+**Manual install** — some external CLIs use official shell-script installers rather than shell-free package-manager commands. For `ntn`, install from <https://ntn.dev> first, then run `opencli ntn ...`.
 
 ### Desktop App Adapters
 
@@ -315,7 +317,6 @@ Control Electron desktop apps directly from the terminal. Each adapter has its o
 | **Antigravity** | Control Antigravity Ultra from terminal | [Doc](./docs/adapters/desktop/antigravity.md) |
 | **ChatGPT App** | Automate ChatGPT macOS desktop app | [Doc](./docs/adapters/desktop/chatgpt-app.md) |
 | **ChatWise** | Multi-LLM client (GPT-4, Claude, Gemini) | [Doc](./docs/adapters/desktop/chatwise.md) |
-| **Notion** | Search, read, write Notion pages | [Doc](./docs/adapters/desktop/notion.md) |
 | **Discord** | Discord Desktop — messages, channels, servers | [Doc](./docs/adapters/desktop/discord.md) |
 | **Doubao** | Control Doubao AI desktop app via CDP | [Doc](./docs/adapters/desktop/doubao-app.md) |
 
