@@ -1,9 +1,9 @@
 import { cli, Strategy } from '@jackwener/opencli/registry';
-import { ArgumentError, AuthRequiredError, CommandExecutionError } from '@jackwener/opencli/errors';
-import { normalizeTwitterScreenName, resolveTwitterQueryId, sanitizeQueryId, extractMedia, unwrapBrowserResult } from './shared.js';
+import { ArgumentError, AuthRequiredError, CommandExecutionError, EmptyResultError } from '@jackwener/opencli/errors';
+import { looksLikePrivateTwitterTimeline, normalizeTwitterScreenName, resolveTwitterQueryId, sanitizeQueryId, extractMedia, unwrapBrowserResult, describeTwitterApiError } from './shared.js';
 import { TWITTER_BEARER_TOKEN, applyTopByEngagement } from './utils.js';
-const LIKES_QUERY_ID = 'RozQdCp4CilQzrcuU0NY5w';
-const USER_BY_SCREEN_NAME_QUERY_ID = 'qRednkZG-rn1P6b48NINmQ';
+const LIKES_QUERY_ID = 'CDWHmpZeSdIJ3HGeRbNm0w';
+const USER_BY_SCREEN_NAME_QUERY_ID = 'IGgvgiOx4QZndDHuD3x9TQ';
 const MAX_PAGINATION_PAGES = 100;
 const FEATURES = {
     rweb_video_screen_enabled: false,
@@ -148,7 +148,7 @@ cli({
         { name: 'limit', type: 'int', default: 20, help: 'Maximum number of liked tweets to return (default 20).' },
         { name: 'top-by-engagement', type: 'int', default: 0, help: 'When set to N>0, re-rank the liked tweets by weighted engagement (likes×1 + retweets×3 + replies×2 + bookmarks×5 + log10(views+1)×0.5) and return the top N. Default 0 keeps the API\'s native (recency) ordering.' },
     ],
-    columns: ['id', 'author', 'name', 'text', 'likes', 'retweets', 'created_at', 'url', 'has_media', 'media_urls'],
+    columns: ['id', 'author', 'name', 'text', 'likes', 'retweets', 'created_at', 'url', 'has_media', 'media_urls', 'media_posters'],
     func: async (page, kwargs) => {
         const limit = kwargs.limit || 20;
         const rawUsername = String(kwargs.username ?? '').trim();
@@ -202,6 +202,7 @@ cli({
         const allTweets = [];
         const seen = new Set();
         let cursor = null;
+        let lastRawResponse = null;
         // Runaway guard only; --limit and cursor exhaustion control normal pagination.
         for (let i = 0; i < MAX_PAGINATION_PAGES && allTweets.length < limit; i++) {
             const fetchCount = Math.min(100, limit - allTweets.length + 10);
@@ -212,14 +213,21 @@ cli({
       }`));
             if (data?.error) {
                 if (allTweets.length === 0)
-                    throw new CommandExecutionError(`HTTP ${data.error}: Failed to fetch likes. queryId may have expired.`);
+                    throw new CommandExecutionError(describeTwitterApiError('Likes', data.error));
                 break;
             }
+            lastRawResponse = data;
             const { tweets, nextCursor } = parseLikes(data, seen);
             allTweets.push(...tweets);
             if (!nextCursor || nextCursor === cursor)
                 break;
             cursor = nextCursor;
+        }
+        if (allTweets.length === 0) {
+            if (looksLikePrivateTwitterTimeline(lastRawResponse)) {
+                throw new EmptyResultError('twitter likes', `No likes returned for @${username} (Likes are private by default on X; only the account owner can view their own likes)`);
+            }
+            throw new EmptyResultError('twitter likes', `No likes found for @${username}`);
         }
         const trimmed = allTweets.slice(0, limit);
         return applyTopByEngagement(trimmed, kwargs['top-by-engagement']);

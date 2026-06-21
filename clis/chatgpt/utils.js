@@ -9,15 +9,67 @@ import { ArgumentError, AuthRequiredError, CommandExecutionError, TimeoutError }
 export const CHATGPT_DOMAIN = 'chatgpt.com';
 export const CHATGPT_URL = 'https://chatgpt.com';
 
+const CHATGPT_MODEL_TARGETS = {
+    instant: {
+        label: 'Instant',
+        labels: ['Instant', '即时', '极速'],
+        optionLabels: ['Instant', '极速', '即时'],
+        testIds: ['model-switcher-gpt-5-5'],
+        intelligenceOrder: 0,
+    },
+    medium: {
+        label: 'Medium',
+        labels: ['Medium', '均衡'],
+        optionLabels: ['Medium', '均衡'],
+        testIds: [],
+        intelligenceOrder: 1,
+    },
+    high: {
+        label: 'High',
+        labels: ['High', '高级', 'Thinking', '思考'],
+        optionLabels: ['High', '高级', 'Thinking', '思考'],
+        testIds: ['model-switcher-gpt-5-5-thinking'],
+        intelligenceOrder: 2,
+    },
+    'extra-high': {
+        label: 'Extra High',
+        labels: ['Extra High', '超高'],
+        optionLabels: ['Extra High', '超高'],
+        testIds: [],
+        intelligenceOrder: 3,
+    },
+    pro: {
+        label: 'Pro',
+        labels: ['Pro', '进阶专业', '专业'],
+        optionLabels: ['专业', 'Pro', '进阶专业'],
+        testIds: ['model-switcher-gpt-5-5-pro'],
+        intelligenceOrder: 4,
+    },
+};
+const CHATGPT_MODEL_ALIASES = {
+    thinking: 'high',
+};
+export const CHATGPT_MODEL_CHOICES = [
+    ...Object.keys(CHATGPT_MODEL_TARGETS),
+    ...Object.keys(CHATGPT_MODEL_ALIASES),
+];
+
+const CHATGPT_TOOL_OPTIONS = {
+    'deep-research': { label: 'Deep Research', labels: ['深度研究', 'Deep Research'] },
+    'web-search': { label: 'Web Search', labels: ['网页搜索', '搜索', 'Web Search', 'Search'] },
+};
+export const CHATGPT_TOOL_CHOICES = Object.keys(CHATGPT_TOOL_OPTIONS);
+
 // Selectors
 const COMPOSER_SELECTORS = [
+    '[contenteditable="true"][role="textbox"]',
+    '#prompt-textarea[contenteditable="true"]',
     '[aria-label="Chat with ChatGPT"]',
     '[aria-label="与 ChatGPT 聊天"]',
     '[placeholder="Ask anything"]',
     '[placeholder="有问题，尽管问"]',
     '#prompt-textarea',
     '[data-testid="prompt-textarea"]',
-    '[contenteditable="true"][role="textbox"]',
 ];
 const SEND_BUTTON_SELECTOR = 'button[data-testid="send-button"]:not([disabled])';
 const SEND_BUTTON_FALLBACK_SELECTORS = [
@@ -27,6 +79,8 @@ const SEND_BUTTON_LABELS = [
     'Send prompt',
     'Send message',
     'Send',
+    '发送',
+    '发送消息',
     '发送提示',
 ];
 const CLOSE_SIDEBAR_LABELS = [
@@ -60,12 +114,11 @@ function buildComposerLocatorScript() {
       };
 
       const findComposer = () => {
-        const marked = document.querySelector('[' + markerAttr + '="1"]');
-        if (marked instanceof HTMLElement && isVisible(marked)) return marked;
-
         for (const selector of ${JSON.stringify(COMPOSER_SELECTORS)}) {
-          const node = Array.from(document.querySelectorAll(selector)).find(c => c instanceof HTMLElement && isVisible(c));
+          const candidates = Array.from(document.querySelectorAll(selector)).filter(c => c instanceof HTMLElement && isVisible(c));
+          const node = candidates.find(c => c.isContentEditable) || candidates[0];
           if (node instanceof HTMLElement) {
+            clearMarkers(node);
             node.setAttribute(markerAttr, '1');
             return node;
           }
@@ -74,7 +127,6 @@ function buildComposerLocatorScript() {
       };
 
       findComposer.toString = () => 'findComposer';
-      return { findComposer, markerAttr };
     `;
 }
 
@@ -99,6 +151,13 @@ export function requireNonEmptyPrompt(prompt, commandName) {
 export function requirePositiveInt(value, flagLabel, hint) {
     if (!Number.isInteger(value) || value < 1) {
         throw new ArgumentError(`${flagLabel} must be a positive integer`, hint);
+    }
+    return value;
+}
+
+export function requireNonNegativeInt(value, flagLabel, hint) {
+    if (!Number.isInteger(value) || value < 0) {
+        throw new ArgumentError(`${flagLabel} must be a non-negative integer`, hint);
     }
     return value;
 }
@@ -149,11 +208,27 @@ export function requireBooleanEvaluateResult(payload, label) {
 
 export function parseChatGPTConversationId(value) {
     const raw = String(value ?? '').trim();
-    const match = raw.match(/(?:^|\/c\/)([A-Za-z0-9_-]{8,})(?:[/?#]|$)/);
-    if (match) return match[1];
+    if (/^https?:\/\//i.test(raw)) {
+        try {
+            const parsed = new URL(raw);
+            if (parsed.protocol !== 'https:' || (parsed.hostname !== CHATGPT_DOMAIN && !parsed.hostname.endsWith(`.${CHATGPT_DOMAIN}`))) {
+                throw new Error('off-domain');
+            }
+            const match = parsed.pathname.match(/^\/c\/([A-Za-z0-9_-]{8,})$/);
+            if (match) return match[1];
+        } catch {
+            // Fall through to the shared typed ArgumentError below.
+        }
+        throw new ArgumentError(
+            'chatgpt detail requires a conversation id or chatgpt.com /c/<id> URL',
+            'Example: opencli chatgpt detail https://chatgpt.com/c/123e4567-e89b-12d3-a456-426614174000',
+        );
+    }
+    const pathMatch = raw.match(/^\/c\/([A-Za-z0-9_-]{8,})(?:[?#].*)?$/);
+    if (pathMatch) return pathMatch[1];
     if (/^[A-Za-z0-9_-]{8,}$/.test(raw)) return raw;
     throw new ArgumentError(
-        'chatgpt detail requires a conversation id or /c/<id> URL',
+        'chatgpt detail requires a conversation id or chatgpt.com /c/<id> URL',
         'Example: opencli chatgpt detail 123e4567-e89b-12d3-a456-426614174000',
     );
 }
@@ -204,6 +279,17 @@ export async function startNewChat(page) {
     }
 }
 
+export async function openChatGPTConversation(page, value) {
+    const id = parseChatGPTConversationId(value);
+    await page.goto(`${CHATGPT_URL}/c/${id}`, { settleMs: 2000 });
+    try {
+        await page.wait({ selector: COMPOSER_WAIT_SELECTOR, timeout: 8 });
+    } catch {
+        // Composer didn't mount; downstream ensureChatGPTLogin / ensureChatGPTComposer surfaces a typed error.
+    }
+    return id;
+}
+
 export async function getPageState(page) {
     return requireObjectEvaluateResult(unwrapEvaluateResult(await page.evaluate(`(() => {
         const isVisible = (el) => {
@@ -248,6 +334,377 @@ export async function ensureChatGPTComposer(page, message = 'ChatGPT composer is
         throw new CommandExecutionError(message);
     }
     return state;
+}
+
+function requireKnownChatGPTModel(model) {
+    const key = String(model ?? '').trim().toLowerCase();
+    const targetKey = CHATGPT_MODEL_ALIASES[key] || key;
+    const option = CHATGPT_MODEL_TARGETS[targetKey];
+    if (!option) {
+        throw new ArgumentError(
+            `Unknown ChatGPT model "${model}"`,
+            `Choose one of: ${CHATGPT_MODEL_CHOICES.join(', ')}`,
+        );
+    }
+    return { key: targetKey, alias: key !== targetKey ? key : null, ...option };
+}
+
+function requireKnownChatGPTTool(tool) {
+    const key = String(tool ?? '').trim().toLowerCase();
+    const option = CHATGPT_TOOL_OPTIONS[key];
+    if (!option) {
+        throw new ArgumentError(
+            `Unknown ChatGPT tool "${tool}"`,
+            `Choose one of: ${CHATGPT_TOOL_CHOICES.join(', ')}`,
+        );
+    }
+    return { key, ...option };
+}
+
+export async function getCurrentChatGPTModel(page) {
+    return requireObjectEvaluateResult(unwrapEvaluateResult(await page.evaluate(`(() => {
+        const isVisible = (el) => {
+            if (!(el instanceof HTMLElement)) return false;
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden') return false;
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        };
+        const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const escapeRegExp = (value) => String(value).replace(/[|\\\\{}()[\\]^$+*?.]/g, '\\\\$&');
+        const textMatchesLabel = (text, label) => {
+            const normalizedText = normalize(text);
+            const normalizedLabel = normalize(label);
+            if (!normalizedText || !normalizedLabel) return false;
+            if (normalizedText === normalizedLabel) return true;
+            if (/^[\\x00-\\x7F]+$/.test(normalizedLabel)) {
+                return new RegExp('(^|\\\\b)' + escapeRegExp(normalizedLabel) + '(\\\\b|$)', 'i').test(normalizedText);
+            }
+            return normalizedText.replace(/\\s+/g, '').includes(normalizedLabel.replace(/\\s+/g, ''));
+        };
+        const labels = ${JSON.stringify(CHATGPT_MODEL_TARGETS)};
+        const findEntryForText = (text) => {
+            const matches = [];
+            for (const [key, value] of Object.entries(labels)) {
+                for (const item of value.labels || []) {
+                    if (textMatchesLabel(text, item)) {
+                        matches.push({ key, value, length: normalize(item).length });
+                    }
+                }
+            }
+            matches.sort((a, b) => b.length - a.length);
+            return matches[0] || null;
+        };
+        const form = Array.from(document.querySelectorAll('form')).find((node) => node instanceof HTMLElement && isVisible(node));
+        const testIdNode = form
+            ? Array.from(form.querySelectorAll('[data-testid]')).find((node) => {
+                if (!(node instanceof HTMLElement) || !isVisible(node)) return false;
+                const testId = node.getAttribute('data-testid');
+                return Object.values(labels).some((entry) => (entry.testIds || []).includes(testId));
+            })
+            : null;
+        const testId = testIdNode?.getAttribute('data-testid') || '';
+        const testIdEntry = Object.entries(labels).find(([, value]) => (value.testIds || []).includes(testId));
+        if (testIdEntry) {
+            return {
+                model: testIdEntry[0],
+                label: testIdEntry[1].label,
+            };
+        }
+        const button = Array.from((form || document).querySelectorAll('button')).find((node) => {
+            if (!isVisible(node)) return false;
+            const text = normalize(node.textContent);
+            return Object.values(labels).some((entry) => entry.labels.some((label) => textMatchesLabel(text, label)));
+        });
+        const label = normalize(button?.textContent || '');
+        const entry = findEntryForText(label);
+        return {
+            model: entry?.key ?? null,
+            label: entry?.value?.label ?? null,
+        };
+    })()`)), 'chatgpt current model');
+}
+
+export async function selectChatGPTModel(page, model) {
+    const target = requireKnownChatGPTModel(model);
+    if (typeof page.nativeClick !== 'function') {
+        throw new CommandExecutionError('ChatGPT model selection requires native browser click support.');
+    }
+    await ensureOnChatGPT(page);
+    await ensureChatGPTComposer(page, 'ChatGPT model selection requires a logged-in ChatGPT session with a visible composer.');
+
+    const before = await getCurrentChatGPTModel(page);
+    if (before.model === target.key) {
+        return { Status: 'Already selected', Model: target.label };
+    }
+
+    const menuButton = requireObjectEvaluateResult(unwrapEvaluateResult(await page.evaluate(`(() => {
+        const isVisible = (el) => {
+            if (!(el instanceof HTMLElement)) return false;
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden') return false;
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        };
+        const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const escapeRegExp = (value) => String(value).replace(/[|\\\\{}()[\\]^$+*?.]/g, '\\\\$&');
+        const textMatchesLabel = (text, label) => {
+            const normalizedText = normalize(text);
+            const normalizedLabel = normalize(label);
+            if (!normalizedText || !normalizedLabel) return false;
+            if (normalizedText === normalizedLabel) return true;
+            if (/^[\\x00-\\x7F]+$/.test(normalizedLabel)) {
+                return new RegExp('(^|\\\\b)' + escapeRegExp(normalizedLabel) + '(\\\\b|$)', 'i').test(normalizedText);
+            }
+            return normalizedText.replace(/\\s+/g, '').includes(normalizedLabel.replace(/\\s+/g, ''));
+        };
+        const labels = ${JSON.stringify(Object.values(CHATGPT_MODEL_TARGETS).flatMap((entry) => entry.labels))};
+        const menuButtonSelectors = [
+            'button[data-testid="model-switcher-dropdown-button"]',
+            'button[aria-label*="model" i]',
+            'button[aria-label*="模型"]',
+            'button[aria-label*="智能"]',
+        ];
+        let button = Array.from(document.querySelectorAll('form button')).find((node) =>
+            isVisible(node) && labels.some((label) => textMatchesLabel(node.textContent, label))
+        );
+        if (!button) {
+            button = menuButtonSelectors
+                .map((selector) => document.querySelector(selector))
+                .find((node) => node instanceof HTMLElement && isVisible(node));
+        }
+        if (!button) return { found: false };
+        button.scrollIntoView({ block: 'center', inline: 'center' });
+        const rect = button.getBoundingClientRect();
+        return {
+            found: true,
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.top + rect.height / 2),
+        };
+    })()`)), 'chatgpt model menu button');
+    if (!menuButton.found) {
+        throw new CommandExecutionError('Could not find the ChatGPT model selector in the composer.');
+    }
+    await page.nativeClick(Number(menuButton.x), Number(menuButton.y));
+    await page.wait(0.5);
+
+    let optionCenter = null;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+        optionCenter = requireObjectEvaluateResult(unwrapEvaluateResult(await page.evaluate(`(() => {
+            const isVisible = (el) => {
+                if (!(el instanceof HTMLElement)) return false;
+                const style = window.getComputedStyle(el);
+                if (style.display === 'none' || style.visibility === 'hidden') return false;
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            };
+            const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+            const escapeRegExp = (value) => String(value).replace(/[|\\\\{}()[\\]^$+*?.]/g, '\\\\$&');
+            const textMatchesLabel = (text, label) => {
+                const normalizedText = normalize(text);
+                const normalizedLabel = normalize(label);
+                if (!normalizedText || !normalizedLabel) return false;
+                if (normalizedText === normalizedLabel) return true;
+                if (/^[\\x00-\\x7F]+$/.test(normalizedLabel)) {
+                    return new RegExp('(^|\\\\b)' + escapeRegExp(normalizedLabel) + '(\\\\b|$)', 'i').test(normalizedText);
+                }
+                return normalizedText.replace(/\\s+/g, '').includes(normalizedLabel.replace(/\\s+/g, ''));
+            };
+            const target = ${JSON.stringify(target)};
+            const clickableSelector = '[role="menuitemradio"], [role="menuitem"], [role="option"], button, [data-testid^="model-switcher"]';
+            const intelligenceContent = document.querySelector('[data-testid="composer-intelligence-picker-content"]');
+            const intelligenceOptions = intelligenceContent
+                ? Array.from(intelligenceContent.querySelectorAll('[role="menuitemradio"]')).filter(isVisible)
+                : [];
+            let option = null;
+            for (const testId of target.testIds || []) {
+                option = Array.from(document.querySelectorAll('[data-testid]')).find((candidate) =>
+                    candidate instanceof HTMLElement && candidate.getAttribute('data-testid') === testId
+                ) || null;
+                if (option instanceof HTMLElement && isVisible(option)) break;
+                option = null;
+            }
+            const clickables = intelligenceOptions.length ? intelligenceOptions : Array.from(document.querySelectorAll(clickableSelector));
+            for (const label of target.optionLabels || target.labels || []) {
+                option = clickables.find((candidate) =>
+                    candidate instanceof HTMLElement
+                    && isVisible(candidate)
+                    && textMatchesLabel(candidate.textContent, label)
+                ) || null;
+                if (option) break;
+
+                const labelRoot = intelligenceContent || document;
+                const labelNode = Array.from(labelRoot.querySelectorAll('span, div, p')).find((candidate) =>
+                    candidate instanceof HTMLElement
+                    && isVisible(candidate)
+                    && textMatchesLabel(candidate.textContent, label)
+                );
+                option = labelNode?.closest(clickableSelector) || null;
+                if (option instanceof HTMLElement && isVisible(option)) break;
+                option = null;
+            }
+            if (!option && Number.isInteger(target.intelligenceOrder)) {
+                if (intelligenceOptions.length === 5) {
+                    option = intelligenceOptions[target.intelligenceOrder] || null;
+                }
+            }
+            if (!(option instanceof HTMLElement) || !isVisible(option)) return { found: false };
+            option.scrollIntoView({ block: 'center', inline: 'center' });
+            const rect = option.getBoundingClientRect();
+            return {
+                found: true,
+                x: Math.round(rect.left + rect.width / 2),
+                y: Math.round(rect.top + rect.height / 2),
+            };
+        })()`)), 'chatgpt model option click');
+        if (optionCenter.found) break;
+        await page.wait(0.5);
+    }
+    if (!optionCenter?.found) {
+        throw new CommandExecutionError(`Could not click the ChatGPT ${target.label} model option.`);
+    }
+    await page.nativeClick(Number(optionCenter.x), Number(optionCenter.y));
+
+    await page.wait(0.5);
+    const after = await getCurrentChatGPTModel(page);
+    if (after.model !== target.key) {
+        await page.nativeClick(Number(menuButton.x), Number(menuButton.y));
+        await page.wait(0.5);
+        const checked = requireObjectEvaluateResult(unwrapEvaluateResult(await page.evaluate(`(() => {
+            const isVisible = (el) => {
+                if (!(el instanceof HTMLElement)) return false;
+                const style = window.getComputedStyle(el);
+                if (style.display === 'none' || style.visibility === 'hidden') return false;
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            };
+            const target = ${JSON.stringify(target)};
+            const intelligenceContent = document.querySelector('[data-testid="composer-intelligence-picker-content"]');
+            const options = intelligenceContent
+                ? Array.from(intelligenceContent.querySelectorAll('[role="menuitemradio"]')).filter(isVisible)
+                : [];
+            const checkedIndex = options.findIndex((node) => node.getAttribute('aria-checked') === 'true');
+            return {
+                recognized: options.length === 5 && Number.isInteger(target.intelligenceOrder),
+                checkedIndex,
+            };
+        })()`)), 'chatgpt model checked intelligence option');
+        if (checked.recognized && checked.checkedIndex === target.intelligenceOrder) {
+            await page.nativeClick(Number(menuButton.x), Number(menuButton.y));
+            return { Status: 'Success', Model: target.label };
+        }
+        await page.nativeClick(Number(menuButton.x), Number(menuButton.y));
+        throw new CommandExecutionError(`ChatGPT model did not switch to ${target.label}.`);
+    }
+    return { Status: 'Success', Model: target.label };
+}
+
+export async function getCurrentChatGPTTool(page) {
+    return requireObjectEvaluateResult(unwrapEvaluateResult(await page.evaluate(`(() => {
+        const isVisible = (el) => {
+            if (!(el instanceof HTMLElement)) return false;
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden') return false;
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        };
+        const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const labels = ${JSON.stringify(CHATGPT_TOOL_OPTIONS)};
+        const form = Array.from(document.querySelectorAll('form')).find((node) => node instanceof HTMLElement && isVisible(node));
+        const root = form || document.body;
+        const nodes = Array.from(root.querySelectorAll('button, [role="button"], [role="menuitemradio"], span, div'));
+        const node = nodes.find((candidate) => {
+            if (!isVisible(candidate)) return false;
+            const text = normalize(candidate.textContent);
+            return Object.values(labels).some((entry) => entry.labels.includes(text));
+        });
+        const label = normalize(node?.textContent || '');
+        const entry = Object.entries(labels).find(([, value]) => value.labels.includes(label));
+        return {
+            tool: entry?.[0] ?? null,
+            label: entry?.[1]?.label ?? null,
+        };
+    })()`)), 'chatgpt current tool');
+}
+
+export async function selectChatGPTTool(page, tool) {
+    const target = requireKnownChatGPTTool(tool);
+    if (typeof page.nativeClick !== 'function') {
+        throw new CommandExecutionError('ChatGPT tool selection requires native browser click support.');
+    }
+    await ensureOnChatGPT(page);
+    await ensureChatGPTComposer(page, 'ChatGPT tool selection requires a logged-in ChatGPT session with a visible composer.');
+
+    const before = await getCurrentChatGPTTool(page);
+    if (before.tool === target.key) {
+        return { Status: 'Already selected', Tool: target.label };
+    }
+
+    const menuButton = requireObjectEvaluateResult(unwrapEvaluateResult(await page.evaluate(`(() => {
+        const isVisible = (el) => {
+            if (!(el instanceof HTMLElement)) return false;
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden') return false;
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        };
+        const button = document.querySelector('button[data-testid="composer-plus-btn"]');
+        if (!(button instanceof HTMLElement) || !isVisible(button)) return { found: false };
+        button.scrollIntoView({ block: 'center', inline: 'center' });
+        const rect = button.getBoundingClientRect();
+        return {
+            found: true,
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.top + rect.height / 2),
+        };
+    })()`)), 'chatgpt tools menu button');
+    if (!menuButton.found) {
+        throw new CommandExecutionError('Could not find the ChatGPT tools menu button in the composer.');
+    }
+    await page.nativeClick(Number(menuButton.x), Number(menuButton.y));
+    await page.wait(0.5);
+
+    let optionCenter = null;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+        optionCenter = requireObjectEvaluateResult(unwrapEvaluateResult(await page.evaluate(`(() => {
+            const isVisible = (el) => {
+                if (!(el instanceof HTMLElement)) return false;
+                const style = window.getComputedStyle(el);
+                if (style.display === 'none' || style.visibility === 'hidden') return false;
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            };
+            const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+            const labels = ${JSON.stringify(target.labels)};
+            const options = Array.from(document.querySelectorAll('[role="menuitemradio"]'));
+            const option = options.find((node) => node instanceof HTMLElement && isVisible(node) && labels.includes(normalize(node.textContent)));
+            if (!(option instanceof HTMLElement)) return { found: false };
+            const checked = option.getAttribute('aria-checked') === 'true';
+            option.scrollIntoView({ block: 'center', inline: 'center' });
+            const rect = option.getBoundingClientRect();
+            return {
+                found: true,
+                checked,
+                x: Math.round(rect.left + rect.width / 2),
+                y: Math.round(rect.top + rect.height / 2),
+            };
+        })()`)), 'chatgpt tool option click');
+        if (optionCenter.found) break;
+        await page.wait(0.5);
+    }
+    if (!optionCenter?.found) {
+        throw new CommandExecutionError(`Could not find the ChatGPT ${target.label} tool option.`);
+    }
+    if (!optionCenter.checked) {
+        await page.nativeClick(Number(optionCenter.x), Number(optionCenter.y));
+    }
+
+    await page.wait(0.5);
+    const after = await getCurrentChatGPTTool(page);
+    if (after.tool !== target.key) {
+        throw new CommandExecutionError(`ChatGPT tool did not switch to ${target.label}.`);
+    }
+    return { Status: optionCenter.checked ? 'Already selected' : 'Success', Tool: target.label };
 }
 
 export async function clearChatGPTDraft(page) {
@@ -302,11 +759,11 @@ export async function sendChatGPTMessage(page, text) {
     // findComposer() retries inside a single CDP call, so no fixed sleep is
     // needed before reading the composer.
 
-    const typeResult = requireBooleanEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
+    const typeResult = requireObjectEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
         (() => {
             ${buildComposerLocatorScript()}
             const composer = findComposer();
-            if (!composer) return false;
+            if (!composer) return { ready: false };
             composer.focus();
             if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
                 composer.value = '';
@@ -318,15 +775,25 @@ export async function sendChatGPTMessage(page, text) {
             }
             composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward', data: null }));
             composer.dispatchEvent(new Event('change', { bubbles: true }));
-            return true;
+            composer.scrollIntoView({ block: 'center', inline: 'center' });
+            const rect = composer.getBoundingClientRect();
+            return {
+                ready: true,
+                x: Math.round(rect.left + Math.max(8, Math.min(rect.width / 2, rect.width - 8))),
+                y: Math.round(rect.top + Math.max(8, Math.min(rect.height / 2, rect.height - 8))),
+            };
         })()
     `)), 'chatgpt composer readiness');
 
-    if (!typeResult) return false;
-    
+    if (!typeResult.ready) return false;
+
     // Use page.type() which is Playwright's native method
     try {
         if (page.nativeType) {
+            if (typeof page.nativeClick === 'function') {
+                await page.nativeClick(Number(typeResult.x), Number(typeResult.y));
+                await page.wait(0.2);
+            }
             await page.nativeType(text);
         } else {
             throw new Error('nativeType unavailable');
@@ -344,22 +811,37 @@ export async function sendChatGPTMessage(page, text) {
             })()
         `);
     }
-    
+
     let sent = null;
     for (let attempt = 0; attempt < 20; attempt += 1) {
         await page.wait(0.5);
         sent = requireObjectEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
             (() => {
+                const isVisible = (el) => {
+                    if (!(el instanceof HTMLElement)) return false;
+                    const style = window.getComputedStyle(el);
+                    if (style.display === 'none' || style.visibility === 'hidden') return false;
+                    const rect = el.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0;
+                };
                 const isUsable = (button) => button
+                    && isVisible(button)
                     && !button.disabled
                     && button.getAttribute('aria-disabled') !== 'true';
-                const primary = document.querySelector(${JSON.stringify(SEND_BUTTON_SELECTOR)})
-                    || ${JSON.stringify(SEND_BUTTON_FALLBACK_SELECTORS)}.map(selector => document.querySelector(selector)).find(Boolean);
-                const btns = Array.from(document.querySelectorAll('button'));
+                const form = Array.from(document.querySelectorAll('form')).find((node) => node instanceof HTMLElement && isVisible(node));
+                const root = form || document.body;
+                const primary = root.querySelector(${JSON.stringify(SEND_BUTTON_SELECTOR)})
+                    || ${JSON.stringify(SEND_BUTTON_FALLBACK_SELECTORS)}.map(selector => root.querySelector(selector)).find(Boolean);
+                const btns = Array.from(root.querySelectorAll('button'));
                 const labels = ${JSON.stringify(SEND_BUTTON_LABELS)};
+                const looksLikeSend = (button) => {
+                    const label = button.getAttribute('aria-label') || '';
+                    const text = (button.innerText || button.textContent || '').replace(/\\s+/g, ' ').trim();
+                    return labels.includes(label) || labels.includes(text) || /send|发送/i.test(label) || /send|发送/i.test(text);
+                };
                 const sendBtn = isUsable(primary)
                     ? primary
-                    : btns.find(b => labels.includes(b.getAttribute('aria-label') || '') && isUsable(b));
+                    : btns.find(b => looksLikeSend(b) && isUsable(b));
                 return { sendBtnFound: !!sendBtn };
             })()
         `)), 'chatgpt send button readiness');
@@ -369,13 +851,33 @@ export async function sendChatGPTMessage(page, text) {
     if (!sent?.sendBtnFound) {
         return false;
     }
-    
+
     await page.evaluate(`
         (() => {
-            const primary = document.querySelector(${JSON.stringify(SEND_BUTTON_SELECTOR)})
-                || ${JSON.stringify(SEND_BUTTON_FALLBACK_SELECTORS)}.map(selector => document.querySelector(selector)).find(Boolean);
+            const isVisible = (el) => {
+                if (!(el instanceof HTMLElement)) return false;
+                const style = window.getComputedStyle(el);
+                if (style.display === 'none' || style.visibility === 'hidden') return false;
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            };
+            const isUsable = (button) => button
+                && isVisible(button)
+                && !button.disabled
+                && button.getAttribute('aria-disabled') !== 'true';
+            const form = Array.from(document.querySelectorAll('form')).find((node) => node instanceof HTMLElement && isVisible(node));
+            const root = form || document.body;
+            const primary = root.querySelector(${JSON.stringify(SEND_BUTTON_SELECTOR)})
+                || ${JSON.stringify(SEND_BUTTON_FALLBACK_SELECTORS)}.map(selector => root.querySelector(selector)).find(Boolean);
             const labels = ${JSON.stringify(SEND_BUTTON_LABELS)};
-            const sendBtn = primary || Array.from(document.querySelectorAll('button')).find(b => labels.includes(b.getAttribute('aria-label') || '') && !b.disabled);
+            const looksLikeSend = (button) => {
+                const label = button.getAttribute('aria-label') || '';
+                const text = (button.innerText || button.textContent || '').replace(/\\s+/g, ' ').trim();
+                return labels.includes(label) || labels.includes(text) || /send|发送/i.test(label) || /send|发送/i.test(text);
+            };
+            const sendBtn = isUsable(primary)
+                ? primary
+                : Array.from(root.querySelectorAll('button')).find(b => looksLikeSend(b) && isUsable(b));
             if (sendBtn) sendBtn.click();
         })()
     `);
@@ -438,6 +940,70 @@ export async function getVisibleMessages(page) {
     })).filter((item) => item.Text);
 }
 
+function formatChatGPTDetailMessages(messages, { wantMarkdown, generating, stableSeconds }) {
+    return messages.map((message) => ({
+        Index: message.Index,
+        Role: message.Role,
+        Text: wantMarkdown && message.Role === 'Assistant' && message.Html
+            ? (messageHtmlToMarkdown(message.Html) || message.Text)
+            : message.Text,
+        Generating: generating,
+        StableSeconds: stableSeconds,
+    }));
+}
+
+export async function getChatGPTDetailRows(page, { wantMarkdown = false, stableSeconds = 0 } = {}) {
+    const generating = await isGenerating(page);
+    const messages = await getVisibleMessages(page);
+    return {
+        messages,
+        rows: formatChatGPTDetailMessages(messages, { wantMarkdown, generating, stableSeconds }),
+        generating,
+    };
+}
+
+export async function waitForChatGPTDetailRows(page, { wantMarkdown = false, timeoutSeconds = 120, stableSeconds = 6 } = {}) {
+    const startTime = Date.now();
+    let lastKey = '';
+    let stableStartedAt = 0;
+
+    while (Date.now() - startTime < timeoutSeconds * 1000) {
+        const generating = await isGenerating(page);
+        const messages = await getVisibleMessages(page);
+        const key = JSON.stringify(messages.map((message) => [message.Role, message.Text]));
+        if (!generating && messages.length && messages[messages.length - 1]?.Role === 'Assistant') {
+            if (key === lastKey) {
+                if (!stableStartedAt) stableStartedAt = Date.now();
+                const elapsedSeconds = Math.floor((Date.now() - stableStartedAt) / 1000);
+                if (elapsedSeconds >= stableSeconds) {
+                    return {
+                        messages,
+                        rows: formatChatGPTDetailMessages(messages, {
+                            wantMarkdown,
+                            generating: false,
+                            stableSeconds: elapsedSeconds,
+                        }),
+                        generating: false,
+                    };
+                }
+            } else {
+                lastKey = key;
+                stableStartedAt = Date.now();
+            }
+        } else {
+            lastKey = key;
+            stableStartedAt = 0;
+        }
+        await page.wait(3);
+    }
+
+    throw new TimeoutError(
+        'chatgpt detail',
+        timeoutSeconds,
+        'Conversation did not finish or stabilize before timeout. Re-run with a higher --timeout if it is still generating.',
+    );
+}
+
 export function messageHtmlToMarkdown(html) {
     try {
         return htmlToMarkdown(html).trim();
@@ -451,23 +1017,90 @@ export async function getBubbleCount(page) {
     return messages.length;
 }
 
-export async function waitForChatGPTResponse(page, baselineCount, prompt, timeoutSeconds) {
+function cleanPromptText(str) {
+    return String(str || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function responsePairKey(user, assistant) {
+    return JSON.stringify([
+        cleanPromptText(user?.Text),
+        String(assistant?.Text || '').trim(),
+    ]);
+}
+
+export function getChatGPTResponsePairKeys(messages, prompt) {
+    const promptKey = cleanPromptText(prompt);
+    if (!promptKey) return [];
+    const keys = [];
+    for (let index = 0; index < messages.length; index += 1) {
+        const user = messages[index];
+        if (user?.Role !== 'User' || cleanPromptText(user.Text) !== promptKey) continue;
+        const assistant = messages.slice(index + 1).find((message) => message?.Role === 'Assistant');
+        if (!assistant || !String(assistant.Text || '').trim()) continue;
+        keys.push(responsePairKey(user, assistant));
+    }
+    return keys;
+}
+
+export function getChatGPTResponsePairCounts(messages, prompt) {
+    const counts = new Map();
+    for (const key of getChatGPTResponsePairKeys(messages, prompt)) {
+        counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    return counts;
+}
+
+function normalizeBaselinePairCounts(options) {
+    if (options.baselinePairCounts instanceof Map) return options.baselinePairCounts;
+    return new Map(Array.from(options.baselinePairKeys || []).map((key) => [key, 1]));
+}
+
+function findLatestNewAssistantResponse(messages, prompt, baselinePairCounts) {
+    const promptKey = cleanPromptText(prompt);
+    if (!promptKey) return '';
+    const currentPairCounts = getChatGPTResponsePairCounts(messages, prompt);
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const user = messages[index];
+        if (user?.Role !== 'User' || cleanPromptText(user.Text) !== promptKey) continue;
+        const assistantIndex = messages.findIndex((message, candidateIndex) => (
+            candidateIndex > index
+            && message?.Role === 'Assistant'
+            && String(message.Text || '').trim()
+        ));
+        if (assistantIndex < 0) continue;
+        const assistant = messages[assistantIndex];
+        const key = responsePairKey(user, assistant);
+        if ((currentPairCounts.get(key) || 0) <= (baselinePairCounts.get(key) || 0)) continue;
+        return String(assistant.Text || '').trim();
+    }
+    return '';
+}
+
+export async function waitForChatGPTResponse(page, baselineCount, prompt, timeoutSeconds, options = {}) {
     const startTime = Date.now();
     let lastText = '';
     let stableCount = 0;
+    const baselinePairCounts = normalizeBaselinePairCounts(options);
 
     while (Date.now() - startTime < timeoutSeconds * 1000) {
         await page.wait(3);
+        if (options.conversationUrl) {
+            const currentUrl = await currentChatGPTUrl(page);
+            if (currentUrl && !isSameChatGPTConversation(currentUrl, options.conversationUrl)) {
+                throw new CommandExecutionError(
+                    `ChatGPT navigated away from the target conversation (${options.conversationUrl}); current URL is ${currentUrl}`,
+                );
+            }
+        }
         if (await isGenerating(page)) {
             stableCount = 0;
             continue;
         }
 
         const messages = await getVisibleMessages(page);
-        const newMessages = messages.slice(Math.max(0, baselineCount));
-        const assistant = [...newMessages].reverse().find((m) => m.Role === 'Assistant')
-            || [...messages].reverse().find((m) => m.Role === 'Assistant');
-        const candidate = String(assistant?.Text || '').trim();
+        const candidate = findLatestNewAssistantResponse(messages, prompt, baselinePairCounts);
         if (!candidate || candidate === String(prompt || '').trim()) continue;
 
         if (candidate === lastText) {
@@ -550,11 +1183,11 @@ async function extractConversationLinks(page) {
         return rows;
     })()`)), 'chatgpt conversation link extraction');
     return items.map((item, index) => ({
-            Index: index + 1,
-            Id: String(item?.Id || ''),
-            Title: String(item?.Title || '(untitled)').trim() || '(untitled)',
-            Url: String(item?.Url || ''),
-        })).filter((item) => item.Id);
+        Index: index + 1,
+        Id: String(item?.Id || ''),
+        Title: String(item?.Title || '(untitled)').trim() || '(untitled)',
+        Url: String(item?.Url || ''),
+    })).filter((item) => item.Id);
 }
 
 function imageMimeFromPath(filePath) {
@@ -610,7 +1243,18 @@ async function waitForChatGPTUploadPreview(page, fileNames) {
                 const scope = root || document.body;
                 if (!scope) return false;
 
-                const previewNodes = scope.querySelectorAll('img[src], canvas, video, [style*="background-image"], [data-testid*="attachment"], [data-testid*="upload"], [class*="attachment"], [class*="upload"]');
+                const isVisibleMedia = (node) => {
+                    if (!(node instanceof HTMLElement)) return false;
+                    const style = window.getComputedStyle(node);
+                    if (style.display === 'none' || style.visibility === 'hidden') return false;
+                    const rect = node.getBoundingClientRect();
+                    const width = node.naturalWidth || node.videoWidth || rect.width || 0;
+                    const height = node.naturalHeight || node.videoHeight || rect.height || 0;
+                    if (width > 32 && height > 32) return true;
+                    const backgroundImage = style.backgroundImage || '';
+                    return /url\\(/.test(backgroundImage) && rect.width > 32 && rect.height > 32;
+                };
+                const previewNodes = Array.from(scope.querySelectorAll('img[src], canvas, video, [style*="background-image"]')).filter(isVisibleMedia);
                 return previewNodes.length >= names.length;
             })()
         `)), 'chatgpt upload preview detection');
@@ -699,9 +1343,14 @@ export async function uploadChatGPTImages(page, imagePaths) {
 export async function isGenerating(page) {
     return requireBooleanEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
         (() => {
+            const text = (document.body?.innerText || '').replace(/\\s+/g, ' ');
+            if (/正在思考|停止生成|Thinking/.test(text)) return true;
             return Array.from(document.querySelectorAll('button')).some(b => {
                 const label = b.getAttribute('aria-label') || '';
-                return label === 'Stop generating' || label.includes('Thinking');
+                return label === 'Stop generating'
+                    || label.includes('Thinking')
+                    || label.includes('停止生成')
+                    || label.includes('正在思考');
             });
         })()
     `)), 'chatgpt generation state');
@@ -721,28 +1370,111 @@ export async function getChatGPTVisibleImageUrls(page) {
                 return rect.width > 32 && rect.height > 32;
             };
 
+            const urls = [];
+            const seen = new Set();
+            const normalizeUrl = (value) => {
+                const raw = String(value || '').trim();
+                if (!raw || raw === 'none') return '';
+                if (/^(?:https?:|blob:|data:)/i.test(raw)) return raw;
+                try {
+                    return new URL(raw, window.location.href).href;
+                } catch {
+                    return raw;
+                }
+            };
+            const addUrl = (value) => {
+                const src = normalizeUrl(value);
+                if (!src || seen.has(src)) return;
+                seen.add(src);
+                urls.push(src);
+            };
+            const isDecorative = (el, src = '') => {
+                const alt = (el.getAttribute('alt') || '').toLowerCase();
+                const cls = String(el.className || '').toLowerCase();
+                const testId = (el.getAttribute('data-testid') || '').toLowerCase();
+                const label = (el.getAttribute('aria-label') || '').toLowerCase();
+                const text = [alt, cls, testId, label, src.toLowerCase()].join(' ');
+                return /avatar|profile|logo|icon/.test(text);
+            };
+            const isUserUploadPreview = (img) => {
+                const alt = (img.getAttribute('alt') || '').toLowerCase();
+                const turn = img.closest('section[data-testid^="conversation-turn"]');
+                const heading = (turn?.querySelector('h4')?.innerText || '').toLowerCase();
+                if (/you said|你说/.test(heading)) return true;
+                if (/chatgpt|assistant|助手/.test(heading)) return false;
+                const openButtonLabel = (img.closest('button[aria-label^="Open image:"]')?.getAttribute('aria-label') || '').toLowerCase();
+                const previewText = [alt, openButtonLabel].join(' ');
+                return /\.(png|jpe?g|webp|gif|heic|heif)(?:\b|$)/i.test(previewText)
+                    || /ref-|reference|参考|upload|uploaded|attachment/.test(previewText);
+            };
+
             const imgs = Array.from(document.querySelectorAll('img')).filter(img =>
                 img instanceof HTMLImageElement && isVisible(img)
             );
 
-            const urls = [];
-            const seen = new Set();
-
             for (const img of imgs) {
                 const src = img.currentSrc || img.src || '';
-                const alt = (img.getAttribute('alt') || '').toLowerCase();
-                const cls = (img.className || '').toLowerCase();
                 const width = img.naturalWidth || img.width || 0;
                 const height = img.naturalHeight || img.height || 0;
 
                 if (!src) continue;
-                if (alt.includes('avatar') || alt.includes('profile') || alt.includes('logo') || alt.includes('icon')) continue;
-                if (cls.includes('avatar') || cls.includes('profile') || cls.includes('icon')) continue;
+                if (isDecorative(img, src)) continue;
+                if (isUserUploadPreview(img)) continue;
                 if (width < 128 && height < 128) continue;
-                if (seen.has(src)) continue;
+                addUrl(src);
+            }
 
-                seen.add(src);
-                urls.push(src);
+            // ChatGPT occasionally renders generated images as CSS background
+            // thumbnails instead of plain <img> nodes. Treat visible, large
+            // background images as generated-image candidates too.
+            for (const el of Array.from(document.querySelectorAll('[style*="background-image"], [style*="background"]'))) {
+                if (!(el instanceof HTMLElement) || !isVisible(el) || isDecorative(el)) continue;
+                const rect = el.getBoundingClientRect();
+                if (rect.width < 128 && rect.height < 128) continue;
+                const backgroundImage = window.getComputedStyle(el).backgroundImage || '';
+                for (const match of backgroundImage.matchAll(/url\\((['"]?)(.*?)\\1\\)/g)) {
+                    const src = match[2];
+                    if (!src || isDecorative(el, src)) continue;
+                    addUrl(src);
+                }
+            }
+
+            // Some ChatGPT image surfaces mount large transparent canvases as
+            // placeholders/overlays before the real backend image is ready. If
+            // those data URLs are accepted as generated assets, the adapter can
+            // save a blank transparent PNG while reporting success. Prefer real
+            // <img>/background URLs; only keep a canvas if it contains at least
+            // one non-transparent/non-white sampled pixel.
+            for (const canvas of Array.from(document.querySelectorAll('canvas'))) {
+                if (!(canvas instanceof HTMLCanvasElement) || !isVisible(canvas) || isDecorative(canvas)) continue;
+                const width = canvas.width || canvas.getBoundingClientRect().width || 0;
+                const height = canvas.height || canvas.getBoundingClientRect().height || 0;
+                if (width < 128 && height < 128) continue;
+                try {
+                    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                    if (!ctx) continue;
+                    const sourceWidth = Math.max(1, Math.floor(canvas.width || width));
+                    const sourceHeight = Math.max(1, Math.floor(canvas.height || height));
+                    const xCount = Math.min(sourceWidth, 16);
+                    const yCount = Math.min(sourceHeight, 16);
+                    let hasContent = false;
+                    for (let yi = 0; yi < yCount && !hasContent; yi += 1) {
+                        const y = Math.min(sourceHeight - 1, Math.floor((yi + 0.5) * sourceHeight / yCount));
+                        for (let xi = 0; xi < xCount && !hasContent; xi += 1) {
+                            const x = Math.min(sourceWidth - 1, Math.floor((xi + 0.5) * sourceWidth / xCount));
+                            const pixel = ctx.getImageData(x, y, 1, 1).data;
+                            const r = pixel[0];
+                            const g = pixel[1];
+                            const b = pixel[2];
+                            const a = pixel[3];
+                            if (a > 0 && !(r > 248 && g > 248 && b > 248)) {
+                                hasContent = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (hasContent) addUrl(canvas.toDataURL('image/png'));
+                } catch { }
             }
             return urls;
         })()
@@ -807,6 +1539,7 @@ export const __test__ = {
     SEND_BUTTON_FALLBACK_SELECTORS,
     SEND_BUTTON_LABELS,
     CLOSE_SIDEBAR_LABELS,
+    buildComposerLocatorScript,
     isSameChatGPTConversation,
     parseChatGPTConversationId,
     imageMimeFromPath,
@@ -850,6 +1583,26 @@ export async function getChatGPTImageAssets(page, urls) {
                 if (img) {
                     width = img.naturalWidth || img.width || 0;
                     height = img.naturalHeight || img.height || 0;
+                } else {
+                    const backgroundEl = Array.from(document.querySelectorAll('[style*="background-image"], [style*="background"]')).find(el => {
+                        if (!(el instanceof HTMLElement)) return false;
+                        const backgroundImage = window.getComputedStyle(el).backgroundImage || '';
+                        return Array.from(backgroundImage.matchAll(/url\\((['"]?)(.*?)\\1\\)/g)).some(match => {
+                            const raw = String(match[2] || '').trim();
+                            if (!raw) return false;
+                            if (raw === targetUrl) return true;
+                            try {
+                                return new URL(raw, window.location.href).href === targetUrl;
+                            } catch {
+                                return false;
+                            }
+                        });
+                    });
+                    if (backgroundEl) {
+                        const rect = backgroundEl.getBoundingClientRect();
+                        width = Math.round(rect.width || 0);
+                        height = Math.round(rect.height || 0);
+                    }
                 }
 
                 try {

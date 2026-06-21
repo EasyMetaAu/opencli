@@ -651,7 +651,7 @@
     "rule": "silent-clamp",
     "command": "twitter/list-tweets",
     "file": "clis/twitter/list-tweets.js",
-    "line": 174,
+    "line": 176,
     "text": "const fetchCount = Math.min(100, limit - allTweets.length + 10);",
     "occurrence": 0
   },
@@ -659,7 +659,7 @@
     "rule": "silent-clamp",
     "command": "twitter/timeline",
     "file": "clis/twitter/timeline.js",
-    "line": 181,
+    "line": 183,
     "text": "const fetchCount = Math.min(40, limit - allTweets.length + 5); // over-fetch slightly for promoted filtering",
     "occurrence": 0
   },
@@ -667,7 +667,7 @@
     "rule": "silent-clamp",
     "command": "twitter/tweets",
     "file": "clis/twitter/tweets.js",
-    "line": 286,
+    "line": 287,
     "text": "const fetchCount = Math.min(100, limit - all.length + 10);",
     "occurrence": 0
   },
@@ -675,7 +675,7 @@
     "rule": "silent-clamp",
     "command": "twitter/tweets",
     "file": "clis/twitter/tweets.js",
-    "line": 231,
+    "line": 232,
     "text": "const limit = Math.max(1, Math.min(200, kwargs.limit || 20));",
     "occurrence": 0
   },
@@ -819,7 +819,7 @@
     "rule": "silent-clamp",
     "command": "zhihu/collection",
     "file": "clis/zhihu/collection.js",
-    "line": 141,
+    "line": 154,
     "text": "const currentFetchLimit = Math.min(pageLimit, requestedLimit - collected.length);",
     "occurrence": 0
   },
@@ -827,7 +827,7 @@
     "rule": "silent-clamp",
     "command": "zhihu/collection",
     "file": "clis/zhihu/collection.js",
-    "line": 130,
+    "line": 143,
     "text": "const pageLimit = Math.min(requestedLimit, 20); // 知乎 API 限制每页最大 20",
     "occurrence": 0
   },
@@ -857,46 +857,6 @@
   },
   {
     "rule": "silent-sentinel",
-    "command": "36kr/article",
-    "file": "clis/36kr/article.js",
-    "line": 57,
-    "text": "{ field: 'author', value: data.author || '-' },",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "36kr/article",
-    "file": "clis/36kr/article.js",
-    "line": 60,
-    "text": "{ field: 'body', value: data.body || '-' },",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "36kr/article",
-    "file": "clis/36kr/article.js",
-    "line": 58,
-    "text": "{ field: 'date', value: data.date || '-' },",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "apple-podcasts/search",
-    "file": "clis/apple-podcasts/search.js",
-    "line": 26,
-    "text": "episodes: p.trackCount ?? '-',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "apple-podcasts/search",
-    "file": "clis/apple-podcasts/search.js",
-    "line": 27,
-    "text": "genre: p.primaryGenreName ?? '-',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
     "command": "bilibili/download",
     "file": "clis/bilibili/download.js",
     "line": 47,
@@ -909,22 +869,6 @@
     "file": "clis/boss/stats.js",
     "line": 39,
     "text": "const jobName = f.jobName || 'unknown';",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "gitee/search",
-    "file": "clis/gitee/search.js",
-    "line": 127,
-    "text": "description: normalizeText(getFirstText(fields.description)) || '-',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "gitee/search",
-    "file": "clis/gitee/search.js",
-    "line": 126,
-    "text": "language: normalizeText(getFirstText(fields.langs)) || '-',",
     "occurrence": 0
   },
   {
@@ -957,118 +901,6 @@
     "file": "clis/jimeng/history.js",
     "line": 30,
     "text": "prompt: params.prompt || item.common_attr?.title || 'N/A',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "lesswrong/comments",
-    "file": "clis/lesswrong/comments.js",
-    "line": 59,
-    "text": "author: user?.displayName ?? 'Unknown',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "lesswrong/curated",
-    "file": "clis/lesswrong/curated.js",
-    "line": 25,
-    "text": "author: item.user?.displayName ?? 'Unknown',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "lesswrong/frontpage",
-    "file": "clis/lesswrong/frontpage.js",
-    "line": 25,
-    "text": "author: item.user?.displayName ?? 'Unknown',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "lesswrong/new",
-    "file": "clis/lesswrong/new.js",
-    "line": 25,
-    "text": "author: item.user?.displayName ?? 'Unknown',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "lesswrong/read",
-    "file": "clis/lesswrong/read.js",
-    "line": 37,
-    "text": "author: post.user?.displayName ?? 'Unknown',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "lesswrong/sequences",
-    "file": "clis/lesswrong/sequences.js",
-    "line": 25,
-    "text": "author: item.user?.displayName ?? 'Unknown',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "lesswrong/shortform",
-    "file": "clis/lesswrong/shortform.js",
-    "line": 25,
-    "text": "author: item.user?.displayName ?? 'Unknown',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "lesswrong/tag",
-    "file": "clis/lesswrong/tag.js",
-    "line": 40,
-    "text": "author: item.user?.displayName ?? 'Unknown',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "lesswrong/top-month",
-    "file": "clis/lesswrong/top-month.js",
-    "line": 25,
-    "text": "author: item.user?.displayName ?? 'Unknown',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "lesswrong/top-week",
-    "file": "clis/lesswrong/top-week.js",
-    "line": 25,
-    "text": "author: item.user?.displayName ?? 'Unknown',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "lesswrong/top-year",
-    "file": "clis/lesswrong/top-year.js",
-    "line": 25,
-    "text": "author: item.user?.displayName ?? 'Unknown',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "lesswrong/top",
-    "file": "clis/lesswrong/top.js",
-    "line": 25,
-    "text": "author: item.user?.displayName ?? 'Unknown',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "reddit/saved",
-    "file": "clis/reddit/saved.js",
-    "line": 33,
-    "text": "title: c.data.title || c.data.body?.slice(0, 100) || '-',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "reddit/upvoted",
-    "file": "clis/reddit/upvoted.js",
-    "line": 33,
-    "text": "title: c.data.title || '-',",
     "occurrence": 0
   },
   {
@@ -1265,42 +1097,10 @@
   },
   {
     "rule": "silent-sentinel",
-    "command": "wikipedia/trending",
-    "file": "clis/wikipedia/trending.js",
-    "line": 32,
-    "text": "description: (a.description ?? '-').slice(0, DESC_MAX_LEN),",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "wikipedia/trending",
-    "file": "clis/wikipedia/trending.js",
-    "line": 31,
-    "text": "title: a.title ?? '-',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
     "command": "xiaohongshu/download",
     "file": "clis/xiaohongshu/download.js",
     "line": 53,
     "text": "result.author = authorEl?.textContent?.trim() || 'unknown';",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "xiaoyuzhou/download",
-    "file": "clis/xiaoyuzhou/download.js",
-    "line": 48,
-    "text": "podcast: ep.podcast?.title || '-',",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "xiaoyuzhou/transcript",
-    "file": "clis/xiaoyuzhou/transcript.js",
-    "line": 70,
-    "text": "podcast: episode.podcast?.title || '-',",
     "occurrence": 0
   },
   {
@@ -1349,30 +1149,6 @@
     "file": "clis/yollomi/video.js",
     "line": 51,
     "text": "return [{ status: 'saved', file: path.relative('.', fp), size: fmtBytes(size), credits: credits ?? '-', url: videoUrl }];",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "zhihu/collection",
-    "file": "clis/zhihu/collection.js",
-    "line": 64,
-    "text": "const type = content.type || 'unknown';",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "zhihu/collection",
-    "file": "clis/zhihu/collection.js",
-    "line": 59,
-    "text": "return `${content.type || 'unknown'}:${content.id || content.url || JSON.stringify(content).slice(0, 80)}`;",
-    "occurrence": 0
-  },
-  {
-    "rule": "silent-sentinel",
-    "command": "zhihu/download",
-    "file": "clis/zhihu/download.js",
-    "line": 44,
-    "text": "result.author = authorEl?.textContent?.trim() || 'unknown';",
     "occurrence": 0
   },
   {
