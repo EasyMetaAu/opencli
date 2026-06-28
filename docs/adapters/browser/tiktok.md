@@ -55,6 +55,13 @@ opencli tiktok publish ./video.mp4 \
   --tags "opencli,demo" \
   --format json
 
+# Schedule a publish (ISO8601 with offset; minutes snap to TikTok's 5-min grid)
+opencli tiktok publish ./video.mp4 \
+  --title "Launch demo" \
+  --privacy public \
+  --schedule 2026-06-30T09:15:00+08:00 \
+  --format json
+
 # Friend suggestions
 opencli tiktok friends --limit 10
 
@@ -197,9 +204,9 @@ callers can distinguish "we just did it" from "it was already done".
 | `status` | enum | `success` / `unsupported` |
 | `code` | enum | `success` / `unsupported_capability` |
 | `capability` | string | Unsupported capability name, otherwise empty |
-| `message` | string | Human-readable publish result or failure reason |
-| `url` | string | Published video URL when TikTok exposes it after publish |
-| `draft` | bool | Always `false` for the current immediate-publish path |
+| `message` | string | Human-readable publish result or failure reason; for scheduled publish it states the selected date/time + timezone (and the requested time when it was snapped to the nearest slot) |
+| `url` | string | Published video URL when TikTok exposes it; empty for scheduled publish (no public URL until the video goes live) |
+| `draft` | bool | Always `false` (immediate and scheduled publish both go through; draft save is unsupported) |
 
 Capability matrix:
 
@@ -207,13 +214,28 @@ Capability matrix:
 |------------|--------|-------|
 | Immediate publish | Supported | `opencli tiktok publish <video> --title ... --format json` |
 | Draft | Unsupported | Returns `code=unsupported_capability`, `capability=draft` |
-| Scheduled publish | Unsupported | Returns `capability=schedule`; no silent downgrade to immediate publish |
+| Scheduled publish | Supported | `--schedule <ISO8601 (with `Z`/offset) or epoch s/ms>`; computed in the browser timezone, minutes snap to TikTok's 5-min grid, and the actually-selected slot is reported in `message` (no silent adjustment) |
 | Cover / thumbnail | Unsupported | Returns `capability=cover` |
 | Tags | Supported | Comma-separated `--tags` are written into the caption as hashtags |
 | Privacy | Public only | `friends` / `private` return `capability=privacy` |
 | Account selection | Unsupported | Uses the active logged-in TikTok Studio account |
 
 Typed failures: invalid file/title/tag input raises `ArgumentError`; missing or expired login raises `AuthRequiredError`; missing browser upload support returns `browser_unsupported`; upload input/file-transfer failures return `upload_failed`; Studio UI/platform state failures return `platform_error`. This lets server callers distinguish validation, relogin, unsupported capability, upload failure, browser capability, and platform failure without parsing browser logs.
+
+### Scheduled publish
+
+`--schedule` accepts ISO8601 (with `Z`/offset, e.g. `2026-06-30T09:17:00+08:00`) or epoch
+seconds/ms. The target instant is converted to the **browser's** timezone to drive TikTok
+Studio's date + time pickers, so the wall-clock shown in Studio matches the post regardless
+of where OpenCLI runs. Minutes snap to TikTok's 5-minute grid (e.g. `:17` → `:15`); the
+selected slot is read back from the picker and reported in `message` (no silent adjustment).
+
+The flow waits for the upload to finish, fills the caption, drives the pickers, clicks
+**预约发布**, then accepts the **"继续发布？"** copyright-check confirm dialog (its
+**立即发布** button submits with the schedule intact). Because this is longer than immediate
+publish, the command's default `--timeout` is **180s** — pass a larger `--timeout` for big
+videos. Privacy is still public-only, so a scheduled command must use `--privacy public`
+(`friends` / `private` return `capability=privacy`).
 
 ## Validation (no silent clamp)
 
