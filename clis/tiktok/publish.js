@@ -117,28 +117,91 @@ async function waitForUploadReady(page) {
     throwPublishFailure(PUBLISH_ERROR_CODES.uploadFailed, 'TikTok upload did not become editable before timeout');
 }
 
+const CAPTION_SELECTORS = [
+    '[data-e2e="caption-input"] [contenteditable="true"]',
+    '[data-e2e="caption-input"] textarea',
+    '.public-DraftEditor-content',
+    '[contenteditable="true"][role="textbox"]',
+    '[contenteditable="true"]',
+    'textarea',
+];
+
+// TikTok's caption box is a DraftJS editor: its text lives in React EditorState, NOT the DOM.
+// setNativeText only rewrites textContent, so the model keeps its default (the uploaded file
+// name) and the post ships the wrong caption. The reliable path is a real CDP click to
+// activate the editor, select-all to mark the default text, then CDP Input.insertText to
+// replace it through DraftJS's beforeinput handler. We verify the new text actually landed
+// and retry, because DraftJS init can lag the upload-ready signal. Newlines are collapsed to
+// spaces (TikTok captions are one free-text block; multi-line programmatic input is mangled).
 async function fillTikTokCaption(page, text) {
-    const result = await page.evaluateWithArgs(`
+    const caption = String(text).replace(/\s*\n+\s*/g, ' ').trim();
+    const probe = caption.replace(/[#@]/g, '').slice(0, 12).trim();
+    const findScript = `
         (() => {
             ${visibleElementScript()}
-            const selectors = [
-                '[data-e2e="caption-input"] [contenteditable="true"]',
-                '[data-e2e="caption-input"] textarea',
-                '[contenteditable="true"][role="textbox"]',
-                '[contenteditable="true"]',
-                'textarea'
-            ];
-            for (const selector of selectors) {
-                const el = Array.from(document.querySelectorAll(selector)).find(isVisible);
-                if (el) {
-                    setNativeText(el, captionText);
-                    return { ok: true, selector };
-                }
-            }
-            return { error: 'platform', message: 'TikTok caption editor was not found after upload' };
+            const sels = ${JSON.stringify(CAPTION_SELECTORS)};
+            let el = null;
+            for (const s of sels) { el = Array.from(document.querySelectorAll(s)).find(isVisible); if (el) break; }
+            return el;
+        })`;
+
+    const sel = await page.evaluate(`
+        (() => {
+            ${visibleElementScript()}
+            const sels = ${JSON.stringify(CAPTION_SELECTORS)};
+            for (const s of sels) { if (Array.from(document.querySelectorAll(s)).find(isVisible)) return s; }
+            return '';
         })()
-    `, { captionText: text });
-    classifyPlatformFailure(PLATFORM, DOMAIN, result, 'TikTok caption fill failed');
+    `);
+    if (!sel) {
+        throwPublishFailure(PUBLISH_ERROR_CODES.platformError, 'TikTok caption editor was not found after upload');
+    }
+
+    let filled = false;
+    for (let attempt = 0; attempt < 3 && !filled; attempt += 1) {
+        try { await page.click(sel); } catch { /* real click is best-effort */ }
+        await page.evaluate(`
+            (() => {
+                const el = ${findScript}();
+                if (!el) return { ok: false };
+                el.focus();
+                if (el.isContentEditable) {
+                    const s = window.getSelection();
+                    const r = document.createRange();
+                    r.selectNodeContents(el);
+                    s.removeAllRanges();
+                    s.addRange(r);
+                } else if (el.select) {
+                    el.select();
+                }
+                return { ok: true };
+            })()
+        `);
+        if (typeof page.insertText === 'function') {
+            await page.insertText(caption);
+        } else {
+            await page.evaluateWithArgs(`
+                (() => {
+                    ${visibleElementScript()}
+                    const el = document.activeElement;
+                    if (el) setNativeText(el, captionText);
+                    return { ok: true };
+                })()
+            `, { captionText: caption });
+        }
+        await page.wait({ time: 0.5 });
+        const check = await page.evaluateWithArgs(`
+            (() => {
+                const el = ${findScript}();
+                const txt = el ? (el.textContent || el.value || '') : '';
+                return { has: probe.length > 0 && txt.indexOf(probe) !== -1 };
+            })()
+        `, { probe });
+        filled = check?.has === true;
+    }
+    if (!filled) {
+        throwPublishFailure(PUBLISH_ERROR_CODES.platformError, 'TikTok caption was not accepted by the editor (DraftJS state did not update with the title/description)');
+    }
 }
 
 // Select "预约发布" (Schedule) and drive TikTok Studio's date+time pickers to the

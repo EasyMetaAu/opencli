@@ -197,6 +197,10 @@ callers can distinguish "we just did it" from "it was already done".
 
 `publish` uploads a local video through TikTok Studio using the active browser session and returns one structured row. Use `--format json` for service integrations.
 
+The caption is `title` + `description` + `#tags` written as a single line into TikTok's
+DraftJS editor. It is committed through real CDP input (not `textContent`), so the post's
+caption reflects what you passed — not the default file name — and is verified before publish.
+
 | Column | Type | Notes |
 |--------|------|-------|
 | `ok` | bool | `true` only when OpenCLI observed a publish success signal |
