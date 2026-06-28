@@ -12,6 +12,7 @@ import {
 import {
     BROWSER_HELPERS,
     MAX_PAGES,
+    OWNER_IDENTITY_RESOLVER,
     SERVER_PAGE_MAX,
     TIKTOK_AID,
     USER_ITEM_NORMALIZER,
@@ -33,45 +34,15 @@ function buildFollowingScript(limit) {
 
   ${BROWSER_HELPERS}
   ${USER_ITEM_NORMALIZER}
+  ${OWNER_IDENTITY_RESOLVER}
 
-  function findViewerSecUid(root) {
-    if (!root) return '';
-    let found = '';
-    walkObjects(root, (node) => {
-      if (Array.isArray(node)) return false;
-      const candidate = node?.user;
-      if (candidate && typeof candidate === 'object') {
-        const secUid = String(candidate.secUid || candidate.sec_uid || '').trim();
-        const isMe = Boolean(candidate.isOwner || candidate.is_owner || candidate.isCurrentUser);
-        if (secUid && isMe) {
-          found = secUid;
-          return true;
-        }
-      }
-      const direct = node?.userInfo?.user;
-      if (direct && (direct.isOwner || direct.is_owner)) {
-        const secUid = String(direct.secUid || direct.sec_uid || '').trim();
-        if (secUid) {
-          found = secUid;
-          return true;
-        }
-      }
-      return false;
-    });
-    return found;
-  }
-
-  const universal = findUniversalData();
-  let viewerSecUid = findViewerSecUid(universal);
   const msToken = getCookie('msToken');
-
-  if (!viewerSecUid) {
-    try {
-      const me = await fetchJson('/api/user/info/?aid=' + aid + (msToken ? '&msToken=' + encodeURIComponent(msToken) : ''));
-      viewerSecUid = String(me?.userInfo?.user?.secUid || me?.user?.secUid || me?.userInfo?.secUid || '').trim();
-    } catch {
-      // Fall through to typed AUTH_REQUIRED below.
-    }
+  let viewerSecUid = '';
+  try {
+    const me = await resolveOwnerIdentity();
+    viewerSecUid = (me && me.sec_uid) || '';
+  } catch (e) {
+    // Fall through to typed AUTH_REQUIRED below.
   }
   if (!viewerSecUid) {
     throw new Error('AUTH_REQUIRED: cannot resolve viewer secUid (login required)');

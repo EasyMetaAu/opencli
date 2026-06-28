@@ -25,6 +25,7 @@ import {
     USER_ITEM_NORMALIZER,
     LIVE_ITEM_NORMALIZER,
     NOTIFICATION_NORMALIZER,
+    OWNER_IDENTITY_RESOLVER,
     normalizeUsername,
     requireLimit,
     requireNotificationType,
@@ -142,6 +143,13 @@ describe('tiktok/utils', () => {
         expect(LIVE_ITEM_NORMALIZER).toContain('room.user_count ?? room.viewerCount');
         expect(LIVE_ITEM_NORMALIZER).toContain('room.like_count ?? room.likeCount');
         expect(NOTIFICATION_NORMALIZER).toContain('function normalizeNotification(');
+    });
+
+    it('OWNER_IDENTITY_RESOLVER exposes resolveOwnerIdentity with rehydration + passport fallback', () => {
+        expect(typeof OWNER_IDENTITY_RESOLVER).toBe('string');
+        expect(OWNER_IDENTITY_RESOLVER).toContain('function resolveOwnerIdentity(');
+        expect(OWNER_IDENTITY_RESOLVER).toContain('/passport/web/account/info/');
+        expect(OWNER_IDENTITY_RESOLVER).toContain('sec_user_id');
     });
 });
 
@@ -308,7 +316,8 @@ describe('tiktok/following (page-context refactor)', () => {
         expect(script).toContain('/api/user/list/');
         expect(script).toContain("assertTikTokApiSuccess(data, 'user-list')");
         expect(script).toContain("scene: '21'");
-        expect(script).toContain('findViewerSecUid');
+        expect(script).toContain('resolveOwnerIdentity');
+        expect(script).toContain('/passport/web/account/info/');
         expect(script).toContain('normalizeUserRow');
     });
 });

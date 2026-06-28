@@ -327,6 +327,65 @@ function pickAuthor(author) {
 }
 `;
 
+// Resolves the *current logged-in* user's identity in page context. Shared by
+// auth.js (whoami / login) and following.js so the rehydration-first +
+// API-fallback logic lives in one place. Depends on BROWSER_HELPERS — paste it
+// (and nothing else) before this template in the same page.evaluate script.
+//
+// Path 1 reads the warm __UNIVERSAL_DATA_FOR_REHYDRATION__ snapshot (no network).
+// Path 2 falls back to the authenticated /passport/web/account/info endpoint,
+// which returns the current account from the session cookies regardless of what
+// the current page embedded in its DOM — this is what makes whoami robust on
+// /foryou, where the rehydration snapshot omits the owner user. Returns null when
+// both paths come up empty; throws (via fetchJson) on a hard HTTP/auth failure so
+// callers can map it to a typed error.
+export const OWNER_IDENTITY_RESOLVER = `
+async function resolveOwnerIdentity() {
+  function ownerFromUniversal(root) {
+    if (!root) return null;
+    let found = null;
+    walkObjects(root, (node) => {
+      if (Array.isArray(node)) return false;
+      const u = (node && node.user) || (node && node.userInfo && node.userInfo.user);
+      if (u && typeof u === 'object') {
+        const secUid = String(u.secUid || u.sec_uid || '').trim();
+        const isMe = Boolean(u.isOwner || u.is_owner || u.isCurrentUser);
+        if (secUid && isMe) {
+          found = {
+            sec_uid: secUid,
+            username: String(u.uniqueId || u.unique_id || u.username || '').replace(/^@+/, ''),
+            nickname: cleanText(u.nickname || u.nickName || '', 80),
+          };
+          return true;
+        }
+      }
+      return false;
+    });
+    return found;
+  }
+
+  const fromDom = ownerFromUniversal(findUniversalData());
+  if (fromDom && fromDom.sec_uid) return fromDom;
+
+  // Authenticated passport endpoint — returns the current account from the
+  // session cookies (httpOnly sessionid is auto-attached via credentials:include),
+  // independent of what the current page chose to embed. Response shape:
+  // { data: { sec_user_id, username, screen_name, ... }, message: 'success' }.
+  // Note: /api/user/info needs a uniqueId/secUid arg (returns "url doesn't match"
+  // bare), so it cannot bootstrap the viewer — passport can.
+  const aid = ${JSON.stringify(TIKTOK_AID)};
+  const me = await fetchJson('/passport/web/account/info/?aid=' + aid);
+  const d = (me && me.data) || {};
+  const secUid = String(d.sec_user_id || d.secUid || d.sec_uid || '').trim();
+  if (!secUid) return null;
+  return {
+    sec_uid: secUid,
+    username: String(d.username || d.unique_id || d.uniqueId || '').replace(/^@+/, ''),
+    nickname: cleanText(d.screen_name || d.nickname || d.nickName || '', 80),
+  };
+}
+`;
+
 // Sanitises a raw TikTok video item into the shape used across adapters.
 // Stays in browser context — the IIFE pastes this builder into its body via
 // the BROWSER_HELPERS bundle plus the adapter-specific normalisation.
