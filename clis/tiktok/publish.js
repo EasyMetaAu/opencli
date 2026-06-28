@@ -97,7 +97,10 @@ async function waitForUploadReady(page) {
                 // The editor (caption box + publish button) renders BEFORE the video bytes
                 // finish uploading; clicking publish while still uploading is silently ignored.
                 // So wait for the in-progress UI to clear, e.g. "4.15MB/4.2MB 还剩 0 秒 取消 99%".
-                const uploading = /还剩\\s*\\d|取消\\s*\\d{1,3}\\s*%|\\d+(?:\\.\\d+)?\\s*MB\\s*\\/\\s*\\d|uploading/i.test(text);
+                // Progress markers seen live: zh "4.15MB/4.2MB 还剩 0 秒 取消 99%",
+                // en "42.02MB/42.45MB ... 0 seconds left ... Cancel ... 99%". The MB/MB form is
+                // language-agnostic and only present while uploading (done shows "Uploaded (x)").
+                const uploading = /还剩\\s*\\d|取消\\s*\\d{1,3}\\s*%|\\d+(?:\\.\\d+)?\\s*MB\\s*\\/\\s*\\d|uploading|seconds?\\s*left|\\bremaining\\b/i.test(text);
                 const hasCaption = !!document.querySelector('[contenteditable="true"], textarea, input[type="text"]');
                 const hasPost = Array.from(document.querySelectorAll('button, [role="button"]')).some((el) => {
                     const label = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
@@ -263,22 +266,30 @@ async function setTikTokSchedule(page, raw) {
             if (!cal) return { ok: false, reason: 'no-calendar' };
             const cnMonth = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10, '十一': 11, '十二': 12 };
             const enMonth = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+            // Read the whole header text so this works whether the panel renders Chinese
+            // ("六月 / 2026") or English ("June 2026"): month via CJK char / English abbrev /
+            // numeric, year via the 4-digit run.
+            const headerText = () => {
+                const hdr = cal.querySelector('.month-header-wrapper');
+                if (hdr) return norm(hdr.textContent);
+                return norm(((cal.querySelector('.month-title') || {}).textContent || '') + ' ' + ((cal.querySelector('.year-title') || {}).textContent || ''));
+            };
             const panelYM = () => {
-                const mt = norm((cal.querySelector('.month-title') || {}).textContent);
-                const yt = norm((cal.querySelector('.year-title') || {}).textContent);
+                const t = headerText();
+                const ym = t.match(/\\d{4}/);
+                const yr = ym ? Number(ym[0]) : null;
                 let mo = null;
-                const key = mt.replace(/月/, '').trim();
-                if (cnMonth[key]) mo = cnMonth[key];
-                if (!mo) { const d = mt.match(/\\d+/); if (d) mo = Number(d[0]); }
-                if (!mo) { const i = enMonth.findIndex((x) => mt.toLowerCase().startsWith(x)); if (i >= 0) mo = i + 1; }
-                const yr = parseInt(yt, 10);
+                const cnKey = (t.match(/[一二三四五六七八九十]+(?=月)/) || [])[0];
+                if (cnKey && cnMonth[cnKey]) mo = cnMonth[cnKey];
+                if (!mo) { const i = enMonth.findIndex((x) => t.toLowerCase().includes(x)); if (i >= 0) mo = i + 1; }
+                if (!mo) { const dm = t.match(/(\\d{1,2})\\s*月/); if (dm) mo = Number(dm[1]); }
                 return (mo && yr) ? { yr, mo } : null;
             };
             const targetYM = TY * 12 + (TM - 1);
             let guard = 0;
             while (guard++ < 48) {
                 const p = panelYM();
-                if (!p) return { ok: false, reason: 'panel-parse', mt: norm((cal.querySelector('.month-title') || {}).textContent) };
+                if (!p) return { ok: false, reason: 'panel-parse', mt: headerText() };
                 const cur = p.yr * 12 + (p.mo - 1);
                 if (cur === targetYM) break;
                 const arrows = cal.querySelectorAll('.month-header-wrapper .arrow');
@@ -302,16 +313,18 @@ async function setTikTokSchedule(page, raw) {
             di = findInputs().find((i) => reDate.test(i.value)) || di;
             const selectedDate = di.value;
 
-            // 3) Time — open the dropdown, pick hour + minute (snap to nearest available).
+            // 3) Time — the TUX timepicker is a SCROLL picker: a single click scroll-snaps and
+            // can land on the wrong slot, so pick hour+minute, read back the settled value, and
+            // retry until it equals the wanted time or converges (i.e. snapped to the nearest
+            // available slot). Reading too eagerly catches a mid-scroll value, hence readTime().
             let ti = findInputs().find((i) => reTime.test(i.value));
             if (!ti) return { ok: false, reason: 'no-time-input' };
-            click(ti);
-            await sleep(500);
-            const tc = document.querySelector('.tiktok-timepicker-time-picker-container');
-            if (!tc) return { ok: false, reason: 'no-time-dropdown' };
-            const pick = (col, val) => {
+            const wantTimeStr = pad(TH) + ':' + pad(TMin);
+            const pickClick = (col, val) => {
+                const tc = document.querySelector('.tiktok-timepicker-time-picker-container');
+                if (!tc) return { miss: 'no-dropdown' };
                 const opts = Array.from(tc.querySelectorAll('span.tiktok-timepicker-option-text.' + col));
-                if (!opts.length) return null;
+                if (!opts.length) return { miss: 'no-options' };
                 let el = opts.find((o) => norm(o.textContent) === val);
                 let snapped = false;
                 if (!el) {
@@ -319,32 +332,44 @@ async function setTikTokSchedule(page, raw) {
                     const nums = opts.map((o) => ({ o, n: parseInt(norm(o.textContent), 10) }))
                         .filter((x) => !Number.isNaN(x.n))
                         .sort((a, b) => Math.abs(a.n - tn) - Math.abs(b.n - tn));
-                    if (!nums.length) return null;
+                    if (!nums.length) return { miss: 'no-options' };
                     el = nums[0].o;
                     snapped = norm(el.textContent) !== val;
                 }
-                return { el, snapped };
+                el.scrollIntoView({ block: 'center' });
+                click(el);
+                return { snapped };
             };
-            const H = pick('tiktok-timepicker-left', pad(TH));
-            if (!H) return { ok: false, reason: 'no-hour-option', hour: pad(TH) };
-            click(H.el);
-            await sleep(400);
-            const M = pick('tiktok-timepicker-right', pad(TMin));
-            if (!M) return { ok: false, reason: 'no-minute-option', minute: pad(TMin) };
-            click(M.el);
-            if (H.snapped || M.snapped) rounded = true;
-            // The TUX timepicker scrolls the picked option to center; the readonly
-            // input only lands on its final value after the scroll settles, so poll
-            // until the displayed value stops changing instead of reading it eagerly.
+            const readTime = async () => {
+                let lastT = null;
+                let stable = 0;
+                for (let i = 0; i < 16; i += 1) {
+                    await sleep(150);
+                    const cur = (findInputs().find((x) => reTime.test(x.value)) || {}).value || '';
+                    if (cur === lastT) { stable += 1; if (stable >= 3) break; } else { stable = 0; lastT = cur; }
+                }
+                return lastT || '';
+            };
             let selectedTime = '';
-            let lastT = null;
-            let stableT = 0;
-            for (let i = 0; i < 24; i += 1) {
-                await sleep(150);
-                const cur = (findInputs().find((x) => reTime.test(x.value)) || {}).value || '';
-                if (cur === lastT) { stableT += 1; if (stableT >= 3) break; } else { stableT = 0; lastT = cur; }
+            let prevSel = null;
+            for (let attempt = 0; attempt < 5; attempt += 1) {
+                if (!document.querySelector('.tiktok-timepicker-time-picker-container')) { click(ti); await sleep(450); }
+                const H = pickClick('tiktok-timepicker-left', pad(TH));
+                if (H.miss) return { ok: false, reason: 'hour-' + H.miss, hour: pad(TH) };
+                await sleep(450);
+                const M = pickClick('tiktok-timepicker-right', pad(TMin));
+                if (M.miss) return { ok: false, reason: 'minute-' + M.miss, minute: pad(TMin) };
+                await sleep(200);
+                if (H.snapped || M.snapped) rounded = true;
+                selectedTime = await readTime();
+                if (selectedTime === wantTimeStr) break;
+                if (selectedTime && selectedTime === prevSel) break; // converged → nearest slot
+                prevSel = selectedTime;
+                ti = findInputs().find((i) => reTime.test(i.value)) || ti;
+                click(ti); // reopen the dropdown for another attempt
+                await sleep(450);
             }
-            selectedTime = lastT || '';
+            if (selectedTime && selectedTime !== wantTimeStr) rounded = true;
 
             return { ok: true, tz, requested, wantDate, wantTime, selectedDate, selectedTime, rounded };
         })()
@@ -394,10 +419,12 @@ async function clickTikTokPublish(page, { scheduled = false } = {}) {
             (() => {
                 ${visibleElementScript()}
                 if (/tiktokstudio\\/content/i.test(location.href)) return { done: true };
+                // Only act inside an actual dialog so we never mis-click a page button when no
+                // confirm prompt is showing (the submit click already went through in that case).
                 const modal = document.querySelector('[role="dialog"], [aria-modal="true"], [class*="modal"], [class*="Modal"]');
-                const scope = modal || document;
-                const btns = Array.from(scope.querySelectorAll('button, [role="button"]'));
-                for (const label of ['立即发布', '继续发布', 'Post now', 'Publish now', 'Continue', 'Publish anyway']) {
+                if (!modal) return { ok: false };
+                const btns = Array.from(modal.querySelectorAll('button, [role="button"]'));
+                for (const label of ['立即发布', '继续发布', 'Post now', 'Schedule now', 'Publish now', 'Post anyway', 'Publish anyway', 'Continue']) {
                     const needle = label.toLowerCase();
                     for (const el of btns) {
                         const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();

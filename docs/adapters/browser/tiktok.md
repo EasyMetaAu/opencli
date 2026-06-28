@@ -241,6 +241,11 @@ publish, the command's default `--timeout` is **180s** — pass a larger `--time
 videos. Privacy is still public-only, so a scheduled command must use `--privacy public`
 (`friends` / `private` return `capability=privacy`).
 
+This works on both the Chinese and English TikTok Studio UI — e.g. the confirm dialog's
+**立即发布** / **Post now** button, the calendar month label (`六月` / `June`), and the
+upload-progress text (`还剩…` / `… seconds left`). The schedule radio, date/time pickers and
+day cells are matched by language-agnostic attributes/classes.
+
 ## Validation (no silent clamp)
 
 `--limit` is validated upfront and `ArgumentError` is thrown for `0`, negative,
