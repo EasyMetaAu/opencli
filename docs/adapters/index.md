@@ -101,6 +101,7 @@ Run `opencli list` for the live registry.
 | **[hackernews](./browser/hackernews.md)**         | `top` `new` `best` `ask` `show` `jobs` `search` `user`                                                                                         | 🌐 Public    |
 | **[bbc](./browser/bbc.md)**                       | `news`                                                                                                                                         | 🌐 Public    |
 | **[devto](./browser/devto.md)**                   | `top` `tag` `user`                                                                                                                             | 🌐 Public    |
+| **[juejin](./browser/juejin.md)**                 | `recommend` `hot`                                                                                                                              | 🌐 Public    |
 | **[dictionary](./browser/dictionary.md)**         | `search` `synonyms` `examples`                                                                                                                 | 🌐 Public    |
 | **[apple-podcasts](./browser/apple-podcasts.md)** | `search` `episodes` `top`                                                                                                                      | 🌐 Public    |
 | **[xiaoyuzhou](./browser/xiaoyuzhou.md)**         | `podcast` `podcast-episodes` `episode` `download` `transcript` (local credentials required)                                                   | 🔑 Local API |
@@ -109,6 +110,7 @@ Run `opencli list` for the live registry.
 | **[arxiv](./browser/arxiv.md)**                   | `search` `paper`                                                                                                                               | 🌐 Public    |
 | **[dblp](./browser/dblp.md)**                     | `search` `author` `paper` `venue`                                                                                                              | 🌐 Public    |
 | **[pubmed](./browser/pubmed.md)**                 | `search` `article` `author` `citations` `related` `clinical-trial` `review` `mesh` `journal`                                                 | 🌐 Public    |
+| **[semanticscholar](./browser/semanticscholar.md)** | `paper` `citations` `recommendations` `search`                                                                                              | 🌐 Public    |
 | **[openreview](./browser/openreview.md)**         | `search` `venue` `author` `paper` `reviews`                                                                                                    | 🌐 Public    |
 | **[paperreview](./browser/paperreview.md)**       | `submit` `review` `feedback`                                                                                                                   | 🌐 Public    |
 | **[barchart](./browser/barchart.md)**             | `quote` `options` `greeks` `flow`                                                                                                              | 🌐 Public    |
@@ -138,6 +140,7 @@ Run `opencli list` for the live registry.
 | **[defillama](./browser/defillama.md)**           | `protocols` `protocol`                                                                                                                         | 🌐 Public    |
 | **[endoflife](./browser/endoflife.md)**           | `product`                                                                                                                                      | 🌐 Public    |
 | **[osv](./browser/osv.md)**                       | `vulnerability` `query`                                                                                                                        | 🌐 Public    |
+| **[github-trending](./browser/github-trending.md)** | `repos`                                                                                                                                       | 🌐 Public    |
 | **[goproxy](./browser/goproxy.md)**               | `module` `versions`                                                                                                                            | 🌐 Public    |
 | **[tvmaze](./browser/tvmaze.md)**                 | `search` `show`                                                                                                                                | 🌐 Public    |
 | **[rfc](./browser/rfc.md)**                       | `rfc`                                                                                                                                          | 🌐 Public    |

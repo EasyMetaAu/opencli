@@ -125,6 +125,7 @@ export default defineConfig({
               items: [
                 { text: 'HackerNews', link: '/adapters/browser/hackernews' },
                 { text: 'Dev.to', link: '/adapters/browser/devto' },
+                { text: 'Juejin', link: '/adapters/browser/juejin' },
                 { text: 'Dictionary', link: '/adapters/browser/dictionary' },
                 { text: 'BBC', link: '/adapters/browser/bbc' },
                 { text: 'Apple Podcasts', link: '/adapters/browser/apple-podcasts' },
@@ -134,6 +135,7 @@ export default defineConfig({
                 { text: 'arXiv', link: '/adapters/browser/arxiv' },
                 { text: 'dblp', link: '/adapters/browser/dblp' },
                 { text: 'PubMed', link: '/adapters/browser/pubmed' },
+                { text: 'Semantic Scholar', link: '/adapters/browser/semanticscholar' },
                 { text: 'paperreview.ai', link: '/adapters/browser/paperreview' },
                 { text: 'Barchart', link: '/adapters/browser/barchart' },
                 { text: 'Hugging Face', link: '/adapters/browser/hf' },
