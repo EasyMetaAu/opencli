@@ -6,9 +6,12 @@ import { log } from './logger.js';
 
 /**
  * Returns the appropriate browser factory based on site type.
- * Uses CDPBridge for registered Electron apps, otherwise BrowserBridge.
+ * Uses CDPBridge when an explicit OPENCLI_CDP_ENDPOINT is set (take over any
+ * already-running browser, e.g. an AdsPower fingerprint browser) or for
+ * registered Electron apps; otherwise BrowserBridge (daemon + extension).
  */
 export function getBrowserFactory(site?: string): new () => IBrowserFactory {
+  if (process.env.OPENCLI_CDP_ENDPOINT) return CDPBridge;
   if (site && isElectronApp(site)) return CDPBridge;
   return BrowserBridge;
 }

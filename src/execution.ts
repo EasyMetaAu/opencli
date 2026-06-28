@@ -229,23 +229,25 @@ export async function executeCommand(
   try {
     if (shouldUseBrowserSession(cmd)) {
       const electron = isElectronApp(cmd.site);
+      // An explicit OPENCLI_CDP_ENDPOINT means "take over the already-running
+      // browser at this endpoint" — honor it for ANY site (normal site adapters
+      // like tiktok/douyin, not just registered Electron apps). Without it,
+      // Electron apps auto-detect their debug port and normal sites fall through
+      // to the BrowserBridge (daemon + extension) path unchanged.
+      const manualEndpoint = process.env.OPENCLI_CDP_ENDPOINT;
       let cdpEndpoint: string | undefined;
 
-      if (electron) {
-        // Electron apps: respect manual endpoint override, then try auto-detect
-        const manualEndpoint = process.env.OPENCLI_CDP_ENDPOINT;
-        if (manualEndpoint) {
-          const port = Number(new URL(manualEndpoint).port);
-          if (!await probeCDP(port)) {
-            throw new CommandExecutionError(
-              `CDP not reachable at ${manualEndpoint}`,
-              'Check that the app is running with --remote-debugging-port and the endpoint is correct.',
-            );
-          }
-          cdpEndpoint = manualEndpoint;
-        } else {
-          cdpEndpoint = await resolveElectronEndpoint(cmd.site);
+      if (manualEndpoint) {
+        const port = Number(new URL(manualEndpoint).port);
+        if (!await probeCDP(port)) {
+          throw new CommandExecutionError(
+            `CDP not reachable at ${manualEndpoint}`,
+            'Check that the app/browser is running with remote debugging and the endpoint is correct.',
+          );
         }
+        cdpEndpoint = manualEndpoint;
+      } else if (electron) {
+        cdpEndpoint = await resolveElectronEndpoint(cmd.site);
       }
 
       const BrowserFactory = getBrowserFactory(cmd.site);
