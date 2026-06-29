@@ -33514,7 +33514,7 @@
         "type": "str",
         "default": "",
         "required": false,
-        "help": "Scheduled publish time (currently returns unsupported_capability)"
+        "help": "Scheduled publish time as ISO8601 (with Z/offset) or epoch seconds/ms; resolved in the browser timezone, minutes snap to TikTok's 5-min grid"
       },
       {
         "name": "privacy",
@@ -33541,6 +33541,13 @@
         "default": false,
         "required": false,
         "help": "Save as draft (currently returns unsupported_capability)"
+      },
+      {
+        "name": "timeout",
+        "type": "int",
+        "default": 180,
+        "required": false,
+        "help": "Max seconds for the overall command; scheduled publish needs headroom for upload + schedule + the copyright-check confirm dialog (default: 180)"
       }
     ],
     "columns": [

@@ -32,7 +32,8 @@ class ActionPage extends BasePage {
   insertText?: (text: string) => Promise<void>;
   nativeKeyPress?: (key: string, modifiers?: string[]) => Promise<void>;
   nativeClick?: (x: number, y: number) => Promise<void>;
-  setFileInput?: (files: string[], selector?: string) => Promise<void>;
+  // setFileInput is now a concrete BasePage method (CDP upload); tests still
+  // override it with a spy via `page.setFileInput = vi.fn()` since it is not readonly.
   cdp?: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 
   async goto(): Promise<void> {}

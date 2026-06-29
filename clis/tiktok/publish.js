@@ -22,6 +22,8 @@ const FILE_SELECTORS = [
 ];
 const READY_TIMEOUT_MS = 180_000;
 const READY_POLL_MS = 1500;
+const CAPTION_READY_TIMEOUT_MS = 45_000;
+const CAPTION_READY_POLL_MS = 500;
 const SUBMIT_TIMEOUT_MS = 90_000;
 const SUBMIT_POLL_MS = 1500;
 
@@ -148,14 +150,23 @@ async function fillTikTokCaption(page, text) {
             return el;
         })`;
 
-    const sel = await page.evaluate(`
+    const selectorScript = `
         (() => {
             ${visibleElementScript()}
             const sels = ${JSON.stringify(CAPTION_SELECTORS)};
             for (const s of sels) { if (Array.from(document.querySelectorAll(s)).find(isVisible)) return s; }
             return '';
         })()
-    `);
+    `;
+    // DraftJS can mount a beat after waitForUploadReady's loose signal, especially on a
+    // slower CDP/AdsPower browser, so poll for the editor instead of probing once.
+    let sel = '';
+    const captionDeadline = Date.now() + CAPTION_READY_TIMEOUT_MS;
+    for (;;) {
+        sel = await page.evaluate(selectorScript);
+        if (sel || Date.now() >= captionDeadline) break;
+        await page.wait({ time: CAPTION_READY_POLL_MS / 1000 });
+    }
     if (!sel) {
         throwPublishFailure(PUBLISH_ERROR_CODES.platformError, 'TikTok caption editor was not found after upload');
     }

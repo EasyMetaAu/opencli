@@ -746,13 +746,16 @@ export abstract class BasePage implements IPage {
     };
   }
 
-  private async setFileInputBySelector(files: string[], selector: string): Promise<void> {
-    const setFileInput = (this as IPage).setFileInput;
-    if (typeof setFileInput === 'function') {
-      await setFileInput.call(this, files, selector);
-      return;
-    }
-
+  /**
+   * Set local file paths on a file input via CDP DOM.setFileInputFiles.
+   * Default implementation drives the active browser over CDP (e.g. an AdsPower
+   * browser taken over via OPENCLI_CDP_ENDPOINT). The extension-backed Page
+   * subclass overrides this to route through the daemon. Defining it here makes
+   * `page.setFileInput` truthy for CDP pages, so every adapter that gates uploads
+   * on it works under CDP instead of throwing browser_unsupported.
+   */
+  async setFileInput(files: string[], selector?: string): Promise<void> {
+    if (!selector) throw new Error('setFileInput requires a CSS selector for the target file input.');
     const cdp = (this as IPage).cdp;
     if (typeof cdp !== 'function') {
       throw new Error('File upload requires setFileInput or CDP support from the active browser backend.');
@@ -765,6 +768,10 @@ export abstract class BasePage implements IPage {
     const nodeId = query?.nodeId;
     if (typeof nodeId !== 'number' || nodeId <= 0) throw new Error(`No element found matching selector: ${selector}`);
     await cdp.call(this, 'DOM.setFileInputFiles', { files, nodeId });
+  }
+
+  private async setFileInputBySelector(files: string[], selector: string): Promise<void> {
+    await this.setFileInput(files, selector);
   }
 
   async uploadFiles(ref: string, files: string[], opts: ResolveOptions = {}): Promise<UploadFilesResult> {
