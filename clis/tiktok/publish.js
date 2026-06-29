@@ -397,25 +397,51 @@ async function setTikTokSchedule(page, raw) {
 }
 
 async function clickTikTokPublish(page, { scheduled = false } = {}) {
-    // Scheduled mode relabels the primary button "预约发布" (recon). clickByLabels only
-    // walks button-like nodes, so it never mistakes the same-text radio label for the
-    // submit button; "发布" is kept as a substring fallback.
+    // Scheduled primary button is "预约发布" / "Schedule"; immediate is "Post now" / "Post".
+    // Scheduled labels deliberately OMIT the bare "Post"/"Publish"/"发布" fallbacks: while
+    // TikTok disables the submit button right after setTikTokSchedule, an exact match can't
+    // land, and a "Post" substring fallback would otherwise click the left-nav "Posts" link
+    // (a button-like node that stays enabled) and pop the "exit?" dialog.
     const labels = scheduled
-        ? ['预约发布', 'Schedule', 'Schedule video', '排程', '定时发布', 'Post', 'Publish', '发布']
-        : ['Post', 'Publish', '发布', '立即发布'];
+        ? ['预约发布', 'Schedule video', 'Schedule', '排程', '定时发布']
+        : ['Post now', 'Post', 'Publish', '立即发布', '发布'];
+    // Opt-in DOM probe (OPENCLI_DEBUG_PUBLISH=1): dump the real submit button vs the
+    // left-nav "Posts" link (tag/role/href/data-e2e/class + ancestor chain) to stderr.
+    if (process.env.OPENCLI_DEBUG_PUBLISH) {
+        try {
+            const probe = await page.evaluate(`
+                (() => {
+                    const norm = (el) => (el.innerText || el.textContent || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
+                    const desc = (el) => ({ tag: el.tagName, role: el.getAttribute('role') || '', href: (el.getAttribute('href') || '').slice(0, 60), e2e: el.getAttribute('data-e2e') || '', cls: (typeof el.className === 'string' ? el.className : '').slice(0, 80), text: norm(el).slice(0, 30) });
+                    const chain = (el) => { const a = []; let p = el; for (let i = 0; i < 4 && p; i += 1) { a.push((p.tagName || '') + (p.getAttribute && p.getAttribute('role') ? '[' + p.getAttribute('role') + ']' : '')); p = p.parentElement; } return a.join('>'); };
+                    const all = Array.from(document.querySelectorAll('button, [role="button"], a[href]'));
+                    const posts = all.filter((el) => /^posts?$/i.test(norm(el))).map((el) => Object.assign(desc(el), { chain: chain(el) }));
+                    const submit = all.filter((el) => /post|publish|schedule|预约|发布|立即/i.test(norm(el))).map((el) => Object.assign(desc(el), { chain: chain(el) }));
+                    return { posts, submit };
+                })()
+            `);
+            process.stderr.write(`[tiktok publish][debug] ${JSON.stringify(probe, null, 2)}\n`);
+        } catch (err) {
+            process.stderr.write(`[tiktok publish][debug] probe failed: ${err && err.message}\n`);
+        }
+    }
     // After setTikTokSchedule, TikTok briefly disables the submit button while it
-    // validates the chosen time, so poll until clickByLabels lands a click.
+    // validates the chosen time, so poll until clickByLabels lands a click. Exclude
+    // 'a[href]' so a link-based nav item can never become the click target.
     const deadline = Date.now() + 20_000;
     let result = null;
     while (Date.now() < deadline) {
         result = await page.evaluateWithArgs(`
             (() => {
                 ${visibleElementScript()}
-                return clickByLabels(labels);
+                return clickByLabels(labels, { excludeWithin: 'a[href]' });
             })()
         `, { labels });
         if (result?.ok) break;
         await page.wait({ time: 0.6 });
+    }
+    if (process.env.OPENCLI_DEBUG_PUBLISH) {
+        process.stderr.write(`[tiktok publish][debug] click result: ${JSON.stringify(result)}\n`);
     }
     if (!result?.ok) {
         throwPublishFailure(PUBLISH_ERROR_CODES.platformError, result?.message || 'TikTok publish button was not found');
