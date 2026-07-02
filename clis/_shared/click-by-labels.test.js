@@ -160,3 +160,68 @@ describe('clickByLabels — excludeLabels / exactOnly (disabled-submit regressio
         expect(loose.text).toBe('upload videos to channel');
     });
 });
+
+describe('clickByLabels — attrSelector / disabled reporting', () => {
+    // TikTok Studio immediate publish, live shape probed 2026-07-02: the real
+    // submit is <button data-e2e="post_video_button">Post</button> and stays
+    // disabled while the server processes the uploaded video.
+    const IMMEDIATE_LABELS = ['Post now', 'Post', 'Publish', '立即发布', '发布'];
+    const TIKTOK_OPTS = {
+        excludeWithin: 'a[href]',
+        excludeLabels: ['posts'],
+        attrSelector: '[data-e2e="post_video_button"]',
+    };
+
+    it('attrSelector clicks the submit even when its text matches no label', () => {
+        document.body.innerHTML = `
+            <button id="nav-posts">Posts</button>
+            <div><button id="submit" data-e2e="post_video_button">Ship it</button></div>
+        `;
+        const hit = trackClicks();
+        const r = clickByLabels(IMMEDIATE_LABELS, { ...TIKTOK_OPTS, exactOnly: true });
+        expect(r.ok).toBe(true);
+        expect(hit()).toBe('submit');
+    });
+
+    it('reports found/disabled when the attrSelector submit is visible but disabled', () => {
+        document.body.innerHTML = `
+            <button id="nav-posts">Posts</button>
+            <div><button id="submit" data-e2e="post_video_button" disabled>Post</button></div>
+        `;
+        const hit = trackClicks();
+        const r = clickByLabels(IMMEDIATE_LABELS, { ...TIKTOK_OPTS, exactOnly: true });
+        expect(r.ok).toBe(false);
+        expect(r.found).toBe(true);
+        expect(r.disabled).toBe(true);
+        expect(hit()).toBe(null);
+    });
+
+    it('reports found/disabled from an exact text match without attrSelector', () => {
+        document.body.innerHTML = `
+            <button id="nav-posts">Posts</button>
+            <div><button id="submit" disabled>Post</button></div>
+        `;
+        const r = clickByLabels(IMMEDIATE_LABELS, { excludeWithin: 'a[href]', excludeLabels: ['posts'], exactOnly: true });
+        expect(r.ok).toBe(false);
+        expect(r.found).toBe(true);
+        expect(r.disabled).toBe(true);
+    });
+
+    it('keeps the plain not-found result when nothing matches at all', () => {
+        document.body.innerHTML = `<div><button id="other">Something else</button></div>`;
+        const r = clickByLabels(IMMEDIATE_LABELS, TIKTOK_OPTS);
+        expect(r.ok).toBe(false);
+        expect(r.found).toBeUndefined();
+        expect(r.disabled).toBeUndefined();
+        expect(r.message).toContain('button not found');
+    });
+
+    it('an aria-disabled attrSelector match also reports disabled (role=button shape)', () => {
+        document.body.innerHTML = `
+            <div role="button" id="submit" data-e2e="post_video_button" aria-disabled="true">Post</div>
+        `;
+        const r = clickByLabels(IMMEDIATE_LABELS, TIKTOK_OPTS);
+        expect(r.ok).toBe(false);
+        expect(r.disabled).toBe(true);
+    });
+});

@@ -222,10 +222,17 @@ function clickByLabels(labels, opts) {
   // Skip nav/sidebar controls (plus any caller-supplied container such as 'a[href]')
   // so a submit label never lands on a navigation item — e.g. the TikTok Studio
   // left-nav "Posts" link, whose text contains the substring "post".
+  // opts.attrSelector: platform-stable attribute selector (e.g. TikTok's
+  //   [data-e2e="post_video_button"]) tried before any text matching — survives
+  //   copy/i18n changes and bypasses the exclude filters (the caller asked for
+  //   this exact element).
   // opts.excludeLabels: normalized exact texts a candidate must never equal — covers
   //   button-like nav items that sit OUTSIDE nav/aside/a[href] (TikTok Studio's
   //   left-nav "Posts" is one). Exclusion wins over a matching label.
   // opts.exactOnly: skip the pass-2 substring fallback entirely.
+  // A visible-but-disabled match (any pass) reports { found, disabled } on failure
+  // so callers can keep waiting for it to enable instead of concluding the button
+  // is missing.
   const exclude = 'nav, [role="navigation"], aside' + (opts && opts.excludeWithin ? ', ' + opts.excludeWithin : '');
   const labelOf = (el) => (el.innerText || el.textContent || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim().toLowerCase();
   const excludedTexts = new Set(((opts && opts.excludeLabels) || []).map((s) => String(s).replace(/\\s+/g, ' ').trim().toLowerCase()));
@@ -234,12 +241,23 @@ function clickByLabels(labels, opts) {
     .filter((el) => !excludedTexts.has(labelOf(el)));
   const clickable = (el) => !(el.disabled || el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('disabled')) && isVisible(el);
   const hit = (el, label) => { el.click(); return { ok: true, label, text: labelOf(el), tag: el.tagName, href: el.getAttribute('href') || '' }; };
+  let sawDisabled = false;
+  // Pass 0: attribute selector — the most stable hook when the platform exposes one.
+  if (opts && opts.attrSelector) {
+    const attrEl = Array.from(document.querySelectorAll(opts.attrSelector)).find(isVisible);
+    if (attrEl) {
+      if (clickable(attrEl)) return hit(attrEl, opts.attrSelector);
+      sawDisabled = true;
+    }
+  }
   // Pass 1: exact text match. Stops a substring label like "Post" from clicking
   // "Posts" — exact match requires the whole label to equal the control's text.
   for (const label of labels) {
     const needle = String(label).replace(/\\s+/g, ' ').trim().toLowerCase();
     for (const el of candidates) {
-      if (clickable(el) && labelOf(el) === needle) return hit(el, label);
+      if (labelOf(el) !== needle) continue;
+      if (clickable(el)) return hit(el, label);
+      if (isVisible(el)) sawDisabled = true;
     }
   }
   // Pass 2: substring fallback (legacy behavior) when no exact match was found.
@@ -247,10 +265,13 @@ function clickByLabels(labels, opts) {
     for (const label of labels) {
       const needle = String(label).toLowerCase();
       for (const el of candidates) {
-        if (clickable(el) && labelOf(el).includes(needle)) return hit(el, label);
+        if (!labelOf(el).includes(needle)) continue;
+        if (clickable(el)) return hit(el, label);
+        if (isVisible(el)) sawDisabled = true;
       }
     }
   }
+  if (sawDisabled) return { ok: false, found: true, disabled: true, message: 'button found but disabled: ' + labels.join(', ') };
   return { ok: false, message: 'button not found: ' + labels.join(', ') };
 }
 `;

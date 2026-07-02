@@ -446,6 +446,12 @@ async function clickTikTokPublish(page, { scheduled = false } = {}) {
     const labels = scheduled
         ? ['预约发布', 'Schedule video', 'Schedule', '排程', '定时发布']
         : ['Post now', 'Post', 'Publish', '立即发布', '发布'];
+    // Probe (2026-07-02, immediate mode): the real submit is
+    // <button data-e2e="post_video_button">Post</button>. The attribute is the
+    // stable hook (survives copy/i18n changes and can't hit the left-nav "Posts");
+    // the text labels above stay as fallback. The same physical button submits in
+    // scheduled mode (only its label flips to "Schedule"), so both modes pass it.
+    const attrSelector = '[data-e2e="post_video_button"]';
     // Opt-in DOM probe (OPENCLI_DEBUG_PUBLISH=1): dump the real submit button vs the
     // left-nav "Posts" link (tag/role/href/data-e2e/class + ancestor chain) to stderr.
     if (process.env.OPENCLI_DEBUG_PUBLISH) {
@@ -453,7 +459,7 @@ async function clickTikTokPublish(page, { scheduled = false } = {}) {
             const probe = await page.evaluate(`
                 (() => {
                     const norm = (el) => (el.innerText || el.textContent || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
-                    const desc = (el) => ({ tag: el.tagName, role: el.getAttribute('role') || '', href: (el.getAttribute('href') || '').slice(0, 60), e2e: el.getAttribute('data-e2e') || '', cls: (typeof el.className === 'string' ? el.className : '').slice(0, 80), text: norm(el).slice(0, 30) });
+                    const desc = (el) => { const r = el.getBoundingClientRect(); return { tag: el.tagName, role: el.getAttribute('role') || '', href: (el.getAttribute('href') || '').slice(0, 60), e2e: el.getAttribute('data-e2e') || '', cls: (typeof el.className === 'string' ? el.className : '').slice(0, 80), text: norm(el).slice(0, 30), disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('disabled')), zeroRect: !(r.width > 0 && r.height > 0) }; };
                     const chain = (el) => { const a = []; let p = el; for (let i = 0; i < 4 && p; i += 1) { a.push((p.tagName || '') + (p.getAttribute && p.getAttribute('role') ? '[' + p.getAttribute('role') + ']' : '')); p = p.parentElement; } return a.join('>'); };
                     const all = Array.from(document.querySelectorAll('button, [role="button"], a[href]'));
                     const posts = all.filter((el) => /^posts?$/i.test(norm(el))).map((el) => Object.assign(desc(el), { chain: chain(el) }));
@@ -478,16 +484,30 @@ async function clickTikTokPublish(page, { scheduled = false } = {}) {
     // click returns ok and stops the poll instantly, defeating the wait-until-enabled
     // intent. Exact-only polling first gives the disabled real button time to enable;
     // the last ~5s restores the fallback (still with excludeLabels) for label variants.
-    const deadline = Date.now() + 30_000;
+    //
+    // Two budgets: 30s to FIND the button at all (fast fail on a redesigned page),
+    // but once a visible-yet-disabled submit is seen, switch to the larger budget —
+    // waitForUploadReady only waits for the upload progress UI to clear, and TikTok
+    // keeps the submit disabled during server-side processing afterwards (observed
+    // 30s+ on a 75MB video, 2026-07-02). OPENCLI_TIKTOK_SUBMIT_TIMEOUT_MS overrides
+    // the processing budget (floored at 30s so a misconfig can't shrink the wait).
+    const submitBudgetMs = Math.max(30_000, Number(process.env.OPENCLI_TIKTOK_SUBMIT_TIMEOUT_MS) || 90_000);
+    const startedAt = Date.now();
+    const notFoundDeadline = startedAt + 30_000;
+    const disabledDeadline = startedAt + submitBudgetMs;
+    let sawDisabled = false;
     let result = null;
-    while (Date.now() < deadline) {
+    while (true) {
+        const deadline = sawDisabled ? disabledDeadline : notFoundDeadline;
+        if (Date.now() >= deadline) break;
         const exactOnly = Date.now() < deadline - 5_000;
         result = await page.evaluateWithArgs(`
             (() => {
                 ${visibleElementScript()}
-                return clickByLabels(labels, { excludeWithin: 'a[href]', excludeLabels, exactOnly });
+                return clickByLabels(labels, { excludeWithin: 'a[href]', excludeLabels, exactOnly, attrSelector });
             })()
-        `, { labels, excludeLabels, exactOnly });
+        `, { labels, excludeLabels, exactOnly, attrSelector });
+        if (result?.disabled) sawDisabled = true;
         if (result?.ok) {
             // Self-heal guard: if the click still landed on a nav item, TikTok pops the
             // "Are you sure you want to exit?" modal a beat later — dismiss it via
@@ -536,6 +556,13 @@ async function clickTikTokPublish(page, { scheduled = false } = {}) {
         process.stderr.write(`[tiktok publish][debug] click result: ${JSON.stringify(result)}\n`);
     }
     if (!result?.ok) {
+        if (sawDisabled) {
+            const waitedS = Math.round((Date.now() - startedAt) / 1000);
+            throwPublishFailure(
+                PUBLISH_ERROR_CODES.platformError,
+                `TikTok publish button stayed disabled for ${waitedS}s (video likely still processing); raise OPENCLI_TIKTOK_SUBMIT_TIMEOUT_MS to wait longer`,
+            );
+        }
         throwPublishFailure(PUBLISH_ERROR_CODES.platformError, result?.message || 'TikTok publish button was not found');
     }
     // TikTok often interrupts with a "继续发布？" dialog when the copyright check has not
