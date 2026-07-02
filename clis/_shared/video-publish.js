@@ -222,11 +222,17 @@ function clickByLabels(labels, opts) {
   // Skip nav/sidebar controls (plus any caller-supplied container such as 'a[href]')
   // so a submit label never lands on a navigation item — e.g. the TikTok Studio
   // left-nav "Posts" link, whose text contains the substring "post".
+  // opts.excludeLabels: normalized exact texts a candidate must never equal — covers
+  //   button-like nav items that sit OUTSIDE nav/aside/a[href] (TikTok Studio's
+  //   left-nav "Posts" is one). Exclusion wins over a matching label.
+  // opts.exactOnly: skip the pass-2 substring fallback entirely.
   const exclude = 'nav, [role="navigation"], aside' + (opts && opts.excludeWithin ? ', ' + opts.excludeWithin : '');
-  const candidates = Array.from(document.querySelectorAll('button, [role="button"], ytcp-button, tp-yt-paper-button'))
-    .filter((el) => !el.closest(exclude));
-  const clickable = (el) => !(el.disabled || el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('disabled')) && isVisible(el);
   const labelOf = (el) => (el.innerText || el.textContent || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  const excludedTexts = new Set(((opts && opts.excludeLabels) || []).map((s) => String(s).replace(/\\s+/g, ' ').trim().toLowerCase()));
+  const candidates = Array.from(document.querySelectorAll('button, [role="button"], ytcp-button, tp-yt-paper-button'))
+    .filter((el) => !el.closest(exclude))
+    .filter((el) => !excludedTexts.has(labelOf(el)));
+  const clickable = (el) => !(el.disabled || el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('disabled')) && isVisible(el);
   const hit = (el, label) => { el.click(); return { ok: true, label, text: labelOf(el), tag: el.tagName, href: el.getAttribute('href') || '' }; };
   // Pass 1: exact text match. Stops a substring label like "Post" from clicking
   // "Posts" — exact match requires the whole label to equal the control's text.
@@ -237,10 +243,12 @@ function clickByLabels(labels, opts) {
     }
   }
   // Pass 2: substring fallback (legacy behavior) when no exact match was found.
-  for (const label of labels) {
-    const needle = String(label).toLowerCase();
-    for (const el of candidates) {
-      if (clickable(el) && labelOf(el).includes(needle)) return hit(el, label);
+  if (!(opts && opts.exactOnly)) {
+    for (const label of labels) {
+      const needle = String(label).toLowerCase();
+      for (const el of candidates) {
+        if (clickable(el) && labelOf(el).includes(needle)) return hit(el, label);
+      }
     }
   }
   return { ok: false, message: 'button not found: ' + labels.join(', ') };

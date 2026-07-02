@@ -101,3 +101,96 @@ describe('tiktok publish adapter', () => {
     });
 
 });
+
+describe('clickTikTokPublish — exit-dialog self-heal guard', () => {
+    // Dispatch fake responses by a stable marker in each injected script:
+    // the click loop embeds clickByLabels, the guard embeds /* exitDialogGuard */,
+    // anything else is the copyright-confirm loop (answered with done).
+    function guardPage({ clickResults, guardResults }) {
+        const calls = { click: 0, guard: 0 };
+        const page = {
+            async evaluateWithArgs(script) {
+                if (script.includes('clickByLabels')) {
+                    const r = clickResults[Math.min(calls.click, clickResults.length - 1)];
+                    calls.click += 1;
+                    return r;
+                }
+                return { ok: true };
+            },
+            async evaluate(script) {
+                if (script.includes('exitDialogGuard')) {
+                    const r = guardResults[Math.min(calls.guard, guardResults.length - 1)];
+                    calls.guard += 1;
+                    return r;
+                }
+                return { done: true };
+            },
+            async wait() {},
+            async screenshot() { return ''; },
+        };
+        return { page, calls };
+    }
+
+    it('dismisses the exit dialog after a wrong click and re-polls until the real button lands', async () => {
+        const { page, calls } = guardPage({
+            clickResults: [{ ok: true, text: 'posts' }, { ok: true, text: 'post' }],
+            guardResults: [{ exitDialog: true, dismissed: true }, { exitDialog: false }],
+        });
+        await expect(__test__.clickTikTokPublish(page)).resolves.toBeUndefined();
+        expect(calls.click).toBe(2);
+        expect(calls.guard).toBe(2);
+    });
+
+    it('accepts a clean click on the first pass (guard sees no exit dialog)', async () => {
+        const { page, calls } = guardPage({
+            clickResults: [{ ok: true, text: 'post' }],
+            guardResults: [{ exitDialog: false }],
+        });
+        await expect(__test__.clickTikTokPublish(page)).resolves.toBeUndefined();
+        expect(calls.click).toBe(1);
+    });
+
+    it('fails loudly when the click navigated somewhere that is neither upload nor content', async () => {
+        const { page } = guardPage({
+            clickResults: [{ ok: true, text: 'post' }],
+            guardResults: [{ navigatedAway: true, href: 'https://www.tiktok.com/tiktokstudio/analytics' }],
+        });
+        await expect(__test__.clickTikTokPublish(page)).rejects.toMatchObject({ code: 'platform_error' });
+    });
+});
+
+describe('dismissTikTokDraftRestoreDialog', () => {
+    function draftPage(results) {
+        let call = 0;
+        return {
+            calls: () => call,
+            async evaluate() {
+                const r = results[Math.min(call, results.length - 1)];
+                call += 1;
+                return r;
+            },
+            async wait() {},
+        };
+    }
+
+    it('clicks Discard when the stale-draft dialog is up, then returns', async () => {
+        const page = draftPage([{ present: true, dismissed: true }]);
+        await expect(__test__.dismissTikTokDraftRestoreDialog(page)).resolves.toBeUndefined();
+        expect(page.calls()).toBe(1);
+    });
+
+    it('returns immediately when the file input is already available and no dialog shows', async () => {
+        const page = draftPage([{ present: false, settled: true }]);
+        await expect(__test__.dismissTikTokDraftRestoreDialog(page)).resolves.toBeUndefined();
+        expect(page.calls()).toBe(1);
+    });
+
+    it('keeps polling while the dialog is visible but the Discard button has not matched yet', async () => {
+        const page = draftPage([
+            { present: true, dismissed: false },
+            { present: true, dismissed: true },
+        ]);
+        await expect(__test__.dismissTikTokDraftRestoreDialog(page)).resolves.toBeUndefined();
+        expect(page.calls()).toBe(2);
+    });
+});

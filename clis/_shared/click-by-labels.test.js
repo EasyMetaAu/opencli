@@ -22,10 +22,10 @@ beforeAll(() => {
 
 afterEach(() => { document.body.innerHTML = ''; });
 
-// Record which button actually received the click.
+// Record which button-like element actually received the click.
 function trackClicks() {
     let hit = null;
-    for (const el of document.querySelectorAll('button')) {
+    for (const el of document.querySelectorAll('button, [role="button"]')) {
         el.addEventListener('click', () => { hit = el.id || el.textContent; });
     }
     return () => hit;
@@ -95,5 +95,68 @@ describe('clickByLabels — submit button vs left-nav', () => {
         expect(r.ok).toBe(true);
         expect(r.tag).toBe('BUTTON');
         expect(hit()).toBe('sch');
+    });
+});
+
+describe('clickByLabels — excludeLabels / exactOnly (disabled-submit regression)', () => {
+    // TikTok Studio while the video is still uploading: the real "Post" submit is
+    // disabled, and the left-nav "Posts" item is a button-like node OUTSIDE any
+    // nav/aside/a[href] container — the shape observed live on 2026-07-02.
+    const IMMEDIATE_LABELS = ['Post now', 'Post', 'Publish', '立即发布', '发布'];
+    const DISABLED_SUBMIT_DOM = `
+        <button id="nav-posts">Posts</button>
+        <div><button id="submit" disabled>Post</button></div>
+    `;
+
+    it('without excludeLabels the substring fallback clicks the nav "Posts" (pins the bug)', () => {
+        document.body.innerHTML = DISABLED_SUBMIT_DOM;
+        const hit = trackClicks();
+        const r = clickByLabels(IMMEDIATE_LABELS, { excludeWithin: 'a[href]' });
+        expect(r.ok).toBe(true);
+        expect(r.text).toBe('posts');
+        expect(hit()).toBe('nav-posts');
+    });
+
+    it('excludeLabels keeps the nav "Posts" unclickable while the submit is disabled', () => {
+        document.body.innerHTML = DISABLED_SUBMIT_DOM;
+        const hit = trackClicks();
+        const r = clickByLabels(IMMEDIATE_LABELS, { excludeWithin: 'a[href]', excludeLabels: ['posts'] });
+        expect(r.ok).toBe(false);
+        expect(hit()).toBe(null);
+    });
+
+    it('excludeLabels does not block the exact "Post" submit once it enables', () => {
+        document.body.innerHTML = `
+            <button id="nav-posts">Posts</button>
+            <div><button id="submit">Post</button></div>
+        `;
+        const hit = trackClicks();
+        const r = clickByLabels(IMMEDIATE_LABELS, { excludeWithin: 'a[href]', excludeLabels: ['posts'] });
+        expect(r.ok).toBe(true);
+        expect(r.text).toBe('post');
+        expect(hit()).toBe('submit');
+    });
+
+    it('excludeLabels also covers a [role=button] nav item (live DOM shape)', () => {
+        document.body.innerHTML = `
+            <div role="button" id="nav-posts">Posts</div>
+            <div><button id="submit" disabled>Post</button></div>
+        `;
+        const hit = trackClicks();
+        const without = clickByLabels(IMMEDIATE_LABELS, { excludeWithin: 'a[href]' });
+        expect(without.ok).toBe(true);
+        expect(without.text).toBe('posts');
+        const r = clickByLabels(IMMEDIATE_LABELS, { excludeWithin: 'a[href]', excludeLabels: ['posts'] });
+        expect(r.ok).toBe(false);
+        expect(hit()).toBe('nav-posts'); // only the unprotected first call clicked
+    });
+
+    it('exactOnly skips the substring fallback; default keeps it (YouTube contract)', () => {
+        document.body.innerHTML = `<div><button id="up">Upload videos to channel</button></div>`;
+        const strict = clickByLabels(['Upload videos'], { exactOnly: true });
+        expect(strict.ok).toBe(false);
+        const loose = clickByLabels(['Upload videos']);
+        expect(loose.ok).toBe(true);
+        expect(loose.text).toBe('upload videos to channel');
     });
 });

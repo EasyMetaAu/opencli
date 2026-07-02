@@ -87,6 +87,45 @@ async function assertTikTokLoggedIn(page) {
     }
 }
 
+// A previous interrupted editing session (killed browser, the nav-misclick bug, a user
+// closing mid-edit) makes TikTok Studio pop "A video you were editing wasn't saved.
+// Continue editing?" (Discard / Continue) on the next /upload visit. While that dialog
+// is up the file input is not rendered, so a fresh publish dies with "file input was
+// not found". We are about to upload a new file, so discard the stale draft. Poll
+// briefly — the dialog can render a beat after page load.
+async function dismissTikTokDraftRestoreDialog(page) {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+        const step = await page.evaluate(`
+            (() => {
+                ${visibleElementScript()}
+                /* draftRestoreGuard */
+                const hasFileInput = !!document.querySelector('input[type="file"]');
+                const modal = document.querySelector('[role="dialog"], [aria-modal="true"], [class*="modal"], [class*="Modal"]');
+                if (!modal) return { present: false, settled: hasFileInput };
+                const text = (modal.innerText || '').replace(/\\s+/g, ' ');
+                if (!/wasn'?t saved|continue editing|未保存|继续编辑/i.test(text)) return { present: false, settled: hasFileInput };
+                const norm = (el) => (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                for (const el of Array.from(modal.querySelectorAll('button, [role="button"]')).filter(isVisible)) {
+                    if (['discard', '放弃', '丢弃', '不保留'].includes(norm(el))) { el.click(); return { present: true, dismissed: true }; }
+                }
+                return { present: true, dismissed: false };
+            })()
+        `);
+        if (step?.dismissed) {
+            if (process.env.OPENCLI_DEBUG_PUBLISH) {
+                process.stderr.write('[tiktok publish][debug] discarded a stale draft-restore dialog\n');
+            }
+            await page.wait({ time: 0.5 });
+            return;
+        }
+        if (step?.settled && !step?.present) return;
+        await page.wait({ time: 0.5 });
+    }
+    // Neither the dialog nor the file input showed up within the window — leave slow
+    // page loads to setFileInput's own 45s selector wait.
+}
+
 async function waitForUploadReady(page) {
     const deadline = Date.now() + READY_TIMEOUT_MS;
     while (Date.now() < deadline) {
@@ -401,7 +440,9 @@ async function clickTikTokPublish(page, { scheduled = false } = {}) {
     // Scheduled labels deliberately OMIT the bare "Post"/"Publish"/"发布" fallbacks: while
     // TikTok disables the submit button right after setTikTokSchedule, an exact match can't
     // land, and a "Post" substring fallback would otherwise click the left-nav "Posts" link
-    // (a button-like node that stays enabled) and pop the "exit?" dialog.
+    // (a button-like node that stays enabled) and pop the "exit?" dialog. Immediate labels
+    // must keep the bare "Post" (that IS the real button's exact text), so the same nav
+    // hazard is closed below via excludeLabels + the exact-only polling window instead.
     const labels = scheduled
         ? ['预约发布', 'Schedule video', 'Schedule', '排程', '定时发布']
         : ['Post now', 'Post', 'Publish', '立即发布', '发布'];
@@ -426,18 +467,69 @@ async function clickTikTokPublish(page, { scheduled = false } = {}) {
         }
     }
     // After setTikTokSchedule, TikTok briefly disables the submit button while it
-    // validates the chosen time, so poll until clickByLabels lands a click. Exclude
-    // 'a[href]' so a link-based nav item can never become the click target.
-    const deadline = Date.now() + 20_000;
+    // validates the chosen time (immediate mode: while the upload is still finishing),
+    // so poll until clickByLabels lands a click. Exclude 'a[href]' so a link-based nav
+    // item can never become the click target, and exclude the left-nav "Posts" item by
+    // exact text — it is a button-like node OUTSIDE nav/aside/a[href], so the bare
+    // 'Post' substring fallback would otherwise click it while the real submit is
+    // disabled ('帖子'/'作品' are unverified zh-UI insurance).
+    const excludeLabels = ['posts', '帖子', '作品'];
+    // The substring fallback is deferred to the tail of the window: a wrong substring
+    // click returns ok and stops the poll instantly, defeating the wait-until-enabled
+    // intent. Exact-only polling first gives the disabled real button time to enable;
+    // the last ~5s restores the fallback (still with excludeLabels) for label variants.
+    const deadline = Date.now() + 30_000;
     let result = null;
     while (Date.now() < deadline) {
+        const exactOnly = Date.now() < deadline - 5_000;
         result = await page.evaluateWithArgs(`
             (() => {
                 ${visibleElementScript()}
-                return clickByLabels(labels, { excludeWithin: 'a[href]' });
+                return clickByLabels(labels, { excludeWithin: 'a[href]', excludeLabels, exactOnly });
             })()
-        `, { labels });
-        if (result?.ok) break;
+        `, { labels, excludeLabels, exactOnly });
+        if (result?.ok) {
+            // Self-heal guard: if the click still landed on a nav item, TikTok pops the
+            // "Are you sure you want to exit?" modal a beat later — dismiss it via
+            // Cancel/取消 and treat the click as failed so polling resumes. Keyed on
+            // exit-specific evidence only: the copyright-confirm dialog also has a
+            // Cancel button and must never match here.
+            await page.wait({ time: 0.7 });
+            const guard = await page.evaluate(`
+                (() => {
+                    ${visibleElementScript()}
+                    /* exitDialogGuard */
+                    const modal = document.querySelector('[role="dialog"], [aria-modal="true"], [class*="modal"], [class*="Modal"]');
+                    if (!modal) {
+                        // A legit submit may already have redirected to /content; only a page
+                        // that is neither upload nor content means the click went astray.
+                        if (!/tiktokstudio\\/(upload|content)/i.test(location.href)) return { navigatedAway: true, href: location.href.slice(0, 120) };
+                        return { exitDialog: false };
+                    }
+                    const norm = (el) => (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                    const btns = Array.from(modal.querySelectorAll('button, [role="button"]')).filter(isVisible);
+                    const exitButton = btns.some((el) => ['exit', 'leave', '退出', '离开'].includes(norm(el)));
+                    const exitText = /are you sure you want to exit|确定(要)?退出|确认退出/i.test(modal.innerText || '');
+                    if (!exitButton && !exitText) return { exitDialog: false };
+                    for (const el of btns) {
+                        if (['cancel', '取消', 'stay'].includes(norm(el))) { el.click(); return { exitDialog: true, dismissed: true }; }
+                    }
+                    return { exitDialog: true, dismissed: false };
+                })()
+            `);
+            if (guard?.navigatedAway) {
+                throwPublishFailure(PUBLISH_ERROR_CODES.platformError, `TikTok publish click navigated away from the upload page (${guard.href}); refusing to trust the result`);
+            }
+            if (guard?.exitDialog) {
+                if (process.env.OPENCLI_DEBUG_PUBLISH) {
+                    process.stderr.write(`[tiktok publish][debug] click ${JSON.stringify(result)} popped the exit dialog (dismissed=${guard.dismissed}); re-polling\n`);
+                }
+                result = null;
+                await page.wait({ time: 0.6 });
+                continue;
+            }
+            break;
+        }
         await page.wait({ time: 0.6 });
     }
     if (process.env.OPENCLI_DEBUG_PUBLISH) {
@@ -552,6 +644,7 @@ export const publishCommand = cli({
         await requireBrowserUploadSupport(page, PLATFORM);
         await page.goto(UPLOAD_URL, { waitUntil: 'load', settleMs: 3000 });
         await assertTikTokLoggedIn(page);
+        await dismissTikTokDraftRestoreDialog(page);
         await setFileInput(page, [input.videoPath], FILE_SELECTORS, PLATFORM);
         await waitForUploadReady(page);
 
@@ -586,4 +679,5 @@ export const __test__ = {
     parseScheduleInstant,
     setTikTokSchedule,
     clickTikTokPublish,
+    dismissTikTokDraftRestoreDialog,
 };
