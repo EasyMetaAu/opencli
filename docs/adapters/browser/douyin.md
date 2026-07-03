@@ -10,7 +10,7 @@
 | `opencli douyin videos` | 获取作品列表 |
 | `opencli douyin drafts` | 获取草稿列表 |
 | `opencli douyin draft` | 上传视频并保存为草稿 |
-| `opencli douyin publish` | 定时发布视频到抖音 |
+| `opencli douyin publish` | 发布视频到抖音（立即 / 定时） |
 | `opencli douyin update` | 更新视频信息 |
 | `opencli douyin delete` | 删除作品 |
 | `opencli douyin stats` | 查询作品数据分析 |
@@ -42,6 +42,11 @@ opencli douyin draft ./video.mp4 \
   --title "春游 vlog" \
   --caption "#春游 先存草稿"
 
+# 立即发布（省略 --schedule）
+opencli douyin publish ./video.mp4 \
+  --title "春游 vlog" \
+  --caption "#春游 今天去看樱花"
+
 # 定时发布
 opencli douyin publish ./video.mp4 \
   --title "春游 vlog" \
@@ -70,6 +75,6 @@ opencli douyin profile -f json
 
 ## Notes
 
-- `publish` requires `--schedule` to be at least 2 hours later and no more than 14 days later
+- `publish` publishes immediately by default; `--schedule` is optional and, when provided, must be at least 2 hours later and no more than 14 days later
 - `draft` and `publish` upload the video through Douyin/ByteDance browser-authenticated APIs, so cookies in the active browser session must be valid
 - `hashtag suggest` expects a valid `cover`/`cover_uri` value produced during the publish pipeline; for normal manual use, `hashtag search` and `hashtag hot` are usually more convenient

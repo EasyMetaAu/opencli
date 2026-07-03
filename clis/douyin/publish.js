@@ -88,13 +88,13 @@ cli({
     site: 'douyin',
     name: 'publish',
     access: 'write',
-    description: '定时发布视频到抖音（必须设置 2h ~ 14天后的发布时间）',
+    description: '发布视频到抖音（默认立即发布；传 --schedule 则定时，2h~14天后）',
     domain: 'creator.douyin.com',
     strategy: Strategy.COOKIE,
     args: [
         { name: 'video', required: true, positional: true, help: '视频文件路径' },
         { name: 'title', required: true, help: '视频标题（≤30字）' },
-        { name: 'schedule', required: true, help: '定时发布时间（ISO8601 或 Unix 秒，2h ~ 14天后）' },
+        { name: 'schedule', default: '', help: '定时发布时间（ISO8601 或 Unix 秒，2h ~ 14天后）；留空为立即发布' },
         { name: 'caption', default: '', help: '正文内容（≤1000字，支持 #话题）' },
         { name: 'cover', default: '', help: '封面图片路径（不提供时使用视频截帧）' },
         { name: 'visibility', default: 'public', choices: ['public', 'friends', 'private'] },
@@ -127,8 +127,11 @@ cli({
         if (caption.length > 1000) {
             throw new ArgumentError('正文不能超过 1000 字');
         }
-        const timingTs = toUnixSeconds(kwargs.schedule);
-        validateTiming(timingTs);
+        const isScheduled = Boolean(kwargs.schedule);
+        const timingTs = isScheduled ? toUnixSeconds(kwargs.schedule) : 0;
+        if (isScheduled) {
+            validateTiming(timingTs);
+        }
         const visibilityType = VISIBILITY_MAP[kwargs.visibility] ?? 0;
         const coverPath = kwargs.cover;
         if (coverPath) {
@@ -317,7 +320,7 @@ cli({
             },
         };
         const publishUrl = `https://creator.douyin.com/web/api/media/aweme/create_v2/?read_aid=2906&${DEVICE_PARAMS}`;
-        process.stderr.write('  创建定时发布...\n');
+        process.stderr.write(isScheduled ? '  创建定时发布...\n' : '  立即发布...\n');
         const publishRes = (await browserFetch(page, 'POST', publishUrl, {
             body: publishBody,
         }));
@@ -326,12 +329,14 @@ cli({
             throw new CommandExecutionError(`发布成功但未返回 aweme_id/item_id: ${JSON.stringify(publishRes)}`);
         }
         const url = `https://www.douyin.com/video/${awemeId}`;
-        const publishTimeStr = new Date(timingTs * 1000).toLocaleString('zh-CN', {
-            timeZone: 'Asia/Tokyo',
-        });
+        const publishTimeStr = isScheduled
+            ? new Date(timingTs * 1000).toLocaleString('zh-CN', {
+                timeZone: 'Asia/Tokyo',
+            })
+            : '立即发布';
         return [
             {
-                status: '✅ 定时发布成功！',
+                status: isScheduled ? '✅ 定时发布成功！' : '✅ 发布成功！',
                 aweme_id: awemeId,
                 url,
                 publish_time: publishTimeStr,

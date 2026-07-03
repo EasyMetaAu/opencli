@@ -69,6 +69,33 @@ describe('douyin publish upload identifier handling', () => {
     expect(createCall?.[3]?.body.item.common.text).toBe('OpenCLI自测');
   });
 
+  it('publishes immediately with timing=0 when schedule is omitted', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'douyin-publish-now-'));
+    const video = path.join(tmpDir, 'video.mp4');
+    fs.writeFileSync(video, Buffer.from('fake-video'));
+
+    const { getRegistry } = await import('@jackwener/opencli/registry');
+    getRegistry().delete('douyin/publish');
+    await import('./publish.js');
+    const cmd = getRegistry().get('douyin/publish');
+    if (!cmd) throw new Error('douyin publish command not registered');
+
+    const result = await cmd.func({}, {
+      video,
+      title: 'OpenCLI立即发布',
+      caption: '',
+      visibility: 'private',
+      no_safety_check: true,
+    });
+
+    const createCall = mocks.browserFetch.mock.calls.find((call) => String(call[2]).includes('/aweme/create_v2/'));
+    expect(createCall).toBeDefined();
+    expect(createCall?.[3]?.body.item.common.timing).toBe(0);
+    expect(result[0].aweme_id).toBe('aweme-1');
+    expect(result[0].status).toBe('✅ 发布成功！');
+    expect(result[0].publish_time).toBe('立即发布');
+  });
+
   it('keeps title-prefixed publish text and hashtag offsets aligned for create_v2', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'douyin-publish-text-'));
     const video = path.join(tmpDir, 'video.mp4');
