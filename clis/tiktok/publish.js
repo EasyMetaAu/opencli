@@ -12,6 +12,13 @@ import {
     validateVideoPublishInput,
     visibleElementScript,
 } from '../_shared/video-publish.js';
+import {
+    installVidHook,
+    waitForVideoId,
+    buildProjectPostBody,
+    projectPost,
+    generateCreationId,
+} from './_shared/api-publish.js';
 
 const PLATFORM = 'tiktok';
 const DOMAIN = 'www.tiktok.com';
@@ -637,6 +644,45 @@ async function waitForTikTokPublishResult(page, { scheduled = false } = {}) {
     throwPublishFailure(PUBLISH_ERROR_CODES.platformError, `TikTok ${scheduled ? 'scheduled ' : ''}publish button clicked but result was unclear before timeout; check TikTok Studio manually.`);
 }
 
+// ── API path (verified 2026-07-03) ─────────────────────────────────────────────
+// Video bytes go up via CDP setFileInput (page SDK → TOS); we sniff the vid from the
+// TOS upload response through CDP network capture, then POST the publish/schedule
+// request directly — no calendar, no timepicker, no publish-button DOM. Requires the
+// network capture to be armed BEFORE the upload is triggered.
+async function publishViaApi(page, { caption, scheduleEpochSec, privacy }) {
+    const info = await waitForVideoId(page, { timeoutMs: READY_TIMEOUT_MS, pollMs: READY_POLL_MS });
+    const body = buildProjectPostBody({
+        creationId: generateCreationId(),
+        videoId: info.video_id,
+        text: caption,
+        scheduleTime: scheduleEpochSec,
+        privacy,
+    });
+    const { item_id } = await projectPost(page, body);
+    const url = item_id ? `https://www.tiktok.com/@me/video/${item_id}` : '';
+    return { item_id, url };
+}
+
+// ── DOM path (fallback) ────────────────────────────────────────────────────────
+// The original browser-automation flow, unchanged: wait for the editor, type the
+// caption into DraftJS, drive the schedule pickers, click publish, read the result.
+async function publishViaDom(page, { caption, schedule }) {
+    await waitForUploadReady(page);
+    await fillTikTokCaption(page, caption);
+    const scheduled = Boolean(schedule);
+    let scheduledInfo = null;
+    if (scheduled) {
+        scheduledInfo = await setTikTokSchedule(page, schedule);
+    }
+    await clickTikTokPublish(page, { scheduled });
+    const publishResult = await waitForTikTokPublishResult(page, { scheduled });
+    const message = scheduledInfo
+        ? `TikTok scheduled for ${scheduledInfo.selectedDate} ${scheduledInfo.selectedTime} (${scheduledInfo.tz})`
+            + (scheduledInfo.rounded ? `; requested ${scheduledInfo.requested}, snapped to nearest available slot` : '')
+        : (publishResult.message || 'TikTok publish completed');
+    return { url: publishResult.url || '', message };
+}
+
 export const publishCommand = cli({
     site: 'tiktok',
     name: 'publish',
@@ -657,6 +703,7 @@ export const publishCommand = cli({
         { name: 'account', default: '', help: 'Account selector (currently returns unsupported_capability)' },
         { name: 'draft', type: 'bool', default: false, help: 'Save as draft (currently returns unsupported_capability)' },
         { name: 'timeout', type: 'int', default: 180, help: 'Max seconds for the overall command; scheduled publish needs headroom for upload + schedule + the copyright-check confirm dialog (default: 180)' },
+        { name: 'mode', default: 'auto', choices: ['auto', 'api', 'dom'], help: 'Publish path: auto = try fast API then fall back to DOM; api = API only; dom = DOM automation only (default: auto)' },
     ],
     columns: ['ok', 'platform', 'status', 'code', 'capability', 'message', 'url', 'draft'],
     func: async (page, kwargs) => {
@@ -668,34 +715,45 @@ export const publishCommand = cli({
         const unsupported = unsupportedForInput(input);
         if (unsupported) return unsupported;
 
+        const mode = kwargs.mode || 'auto';
+        const caption = [input.title, buildDescriptionWithTags(input.description, input.tags)].filter(Boolean).join('\n\n');
+        // schedule → epoch seconds for the API path (0 = publish now).
+        const scheduleEpochSec = input.schedule ? Math.floor(parseScheduleInstant(input.schedule).epochMs / 1000) : 0;
+        const canApi = mode !== 'dom';
+
         await requireBrowserUploadSupport(page, PLATFORM);
         await page.goto(UPLOAD_URL, { waitUntil: 'load', settleMs: 3000 });
         await assertTikTokLoggedIn(page);
         await dismissTikTokDraftRestoreDialog(page);
+        // Install the page-side vid hook AFTER navigation (fresh context) but BEFORE the
+        // upload, so the API path can read the vid from the TOS finish response.
+        if (canApi) {
+            await installVidHook(page).catch(() => {});
+        }
         await setFileInput(page, [input.videoPath], FILE_SELECTORS, PLATFORM);
-        await waitForUploadReady(page);
 
-        const caption = [input.title, buildDescriptionWithTags(input.description, input.tags)].filter(Boolean).join('\n\n');
-        await fillTikTokCaption(page, caption);
-
-        const scheduled = Boolean(input.schedule);
-        let scheduledInfo = null;
-        if (scheduled) {
-            scheduledInfo = await setTikTokSchedule(page, input.schedule);
+        // API path first (fast, no DOM). Fall back to DOM unless the user forced a mode.
+        if (canApi) {
+            try {
+                const apiResult = await publishViaApi(page, { caption, scheduleEpochSec, privacy: input.privacy });
+                const message = scheduleEpochSec
+                    ? `TikTok scheduled via API for ${new Date(scheduleEpochSec * 1000).toISOString()} (item ${apiResult.item_id})`
+                    : `TikTok published via API (item ${apiResult.item_id})`;
+                return successResult(PLATFORM, message, { url: apiResult.url, draft: false });
+            } catch (apiError) {
+                if (mode === 'api') {
+                    throwPublishFailure(PUBLISH_ERROR_CODES.platformError, `TikTok API publish failed: ${apiError instanceof Error ? apiError.message : String(apiError)}`);
+                }
+                // fall through to DOM path
+                if (process.env.OPENCLI_DEBUG_PUBLISH) {
+                    process.stderr.write(`[tiktok publish][debug] API path failed, falling back to DOM: ${apiError instanceof Error ? apiError.message : String(apiError)}\n`);
+                }
+            }
         }
 
-        await clickTikTokPublish(page, { scheduled });
-        const publishResult = await waitForTikTokPublishResult(page, { scheduled });
-
-        const message = scheduledInfo
-            ? `TikTok scheduled for ${scheduledInfo.selectedDate} ${scheduledInfo.selectedTime} (${scheduledInfo.tz})`
-                + (scheduledInfo.rounded ? `; requested ${scheduledInfo.requested}, snapped to nearest available slot` : '')
-            : (publishResult.message || 'TikTok publish completed');
-
-        return successResult(PLATFORM, message, {
-            url: publishResult.url || '',
-            draft: false,
-        });
+        // DOM path (fallback, or mode=dom).
+        const domResult = await publishViaDom(page, { caption, schedule: input.schedule });
+        return successResult(PLATFORM, domResult.message, { url: domResult.url, draft: false });
     },
 });
 

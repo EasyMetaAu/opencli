@@ -102,6 +102,81 @@ describe('tiktok publish adapter', () => {
 
 });
 
+describe('tiktok publish — API path with DOM fallback', () => {
+    // A page mock for the API path: the vid hook is read via evaluate('window.__ttUploadVid').
+    // `vid` is the captured video info (or null to simulate a failed upload capture).
+    function apiPage({ vid, postResponse }) {
+        const calls = { setFileInput: 0, evaluate: 0, domCaptionOrPicker: 0 };
+        const page = {
+            async goto() {},
+            async setFileInput() { calls.setFileInput += 1; },
+            async setInputFiles() { calls.setFileInput += 1; },
+            async wait() {},
+            async screenshot() { return ''; },
+            async evaluate(js) {
+                calls.evaluate += 1;
+                const s = String(js);
+                // publish/check fetches run through evaluate → success envelope
+                if (s.includes('project/post/v1')) return { __http: 200, __json: postResponse };
+                if (s.includes('content/check/create')) return { __http: 200, __json: { check_ids: {}, status_code: 0 } };
+                // vid hook read
+                if (s.includes('__ttUploadVid')) return vid || null;
+                // vid hook install
+                if (s.includes('__ttVidHookInstalled')) return { installed: true };
+                // login check → logged in
+                if (s.includes('loginLike') || (s.includes('location.href') && s.includes('input[type="file"]'))) return { ok: true, url: 'https://www.tiktok.com/tiktokstudio/upload' };
+                // draft-restore guard → nothing to dismiss
+                if (s.includes('draftRestoreGuard')) return { present: false, settled: true };
+                // any DOM caption/timepicker/calendar work counts as a DOM-path touch
+                if (s.includes('DraftEditor') || s.includes('tiktok-timepicker') || s.includes('calendar-wrapper') || s.includes('postSchedule')) { calls.domCaptionOrPicker += 1; return { ok: true }; }
+                return { ok: true };
+            },
+            async evaluateWithArgs() { return { ok: true }; },
+        };
+        return { page, calls };
+    }
+
+    const tempVideoLocal = () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencli-tt-api-'));
+        const f = path.join(dir, 'v.mp4');
+        fs.writeFileSync(f, 'x');
+        return f;
+    };
+
+    it('publishes via API (no DOM picker) when the vid hook yields a vid', async () => {
+        const { page, calls } = apiPage({
+            vid: { video_id: 'v12025gd0000dTEST0000000000000000', width: 1080, height: 1920 },
+            postResponse: { status_code: 0, project_id: 'p1', single_post_resp_list: [{ item_id: '7658000000000000001', status_code: 0 }] },
+        });
+        const rows = await publishCommand.func(page, { video: tempVideoLocal(), title: 'hi #tag', mode: 'auto' });
+        expect(rows[0]).toMatchObject({ ok: true, platform: 'tiktok' });
+        expect(rows[0].message).toContain('7658000000000000001');
+        expect(rows[0].url).toContain('7658000000000000001');
+        // API path must NOT have touched the DOM caption/picker
+        expect(calls.domCaptionOrPicker).toBe(0);
+    });
+
+    it('includes schedule_time in the API message when scheduled', async () => {
+        const future = new Date(Date.now() + 3 * 24 * 3600_000).toISOString();
+        const { page } = apiPage({
+            vid: { video_id: 'v12025gd0000dTEST0000000000000000' },
+            postResponse: { status_code: 0, single_post_resp_list: [{ item_id: '7658000000000000002', status_code: 0 }] },
+        });
+        const rows = await publishCommand.func(page, { video: tempVideoLocal(), title: 'hi', schedule: future, mode: 'auto' });
+        expect(rows[0].message).toContain('scheduled via API');
+    });
+
+    it('mode=api surfaces a platform_error if the API path fails (no silent DOM fallback)', async () => {
+        // vid is captured, but the publish request returns a business error → fails fast.
+        const { page } = apiPage({
+            vid: { video_id: 'v12025gd0000dTEST0000000000000000' },
+            postResponse: { status_code: 10001, status_msg: 'rejected', single_post_resp_list: [] },
+        });
+        await expect(publishCommand.func(page, { video: tempVideoLocal(), title: 'x', mode: 'api' }))
+            .rejects.toMatchObject({ code: 'platform_error' });
+    });
+});
+
 describe('clickTikTokPublish — exit-dialog self-heal guard', () => {
     // Dispatch fake responses by a stable marker in each injected script:
     // the click loop embeds clickByLabels, the guard embeds /* exitDialogGuard */,

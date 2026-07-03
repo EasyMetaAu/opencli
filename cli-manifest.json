@@ -33548,6 +33548,18 @@
         "default": 180,
         "required": false,
         "help": "Max seconds for the overall command; scheduled publish needs headroom for upload + schedule + the copyright-check confirm dialog (default: 180)"
+      },
+      {
+        "name": "mode",
+        "type": "str",
+        "default": "auto",
+        "required": false,
+        "help": "Publish path: auto = try fast API then fall back to DOM; api = API only; dom = DOM automation only (default: auto)",
+        "choices": [
+          "auto",
+          "api",
+          "dom"
+        ]
       }
     ],
     "columns": [
