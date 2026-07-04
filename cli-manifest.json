@@ -12035,7 +12035,7 @@
   {
     "site": "douyin",
     "name": "publish",
-    "description": "定时发布视频到抖音（必须设置 2h ~ 14天后的发布时间）",
+    "description": "发布视频到抖音（默认立即发布；传 --schedule 则定时，2h~14天后）",
     "access": "write",
     "domain": "creator.douyin.com",
     "strategy": "cookie",
@@ -12057,8 +12057,9 @@
       {
         "name": "schedule",
         "type": "str",
-        "required": true,
-        "help": "定时发布时间（ISO8601 或 Unix 秒，2h ~ 14天后）"
+        "default": "",
+        "required": false,
+        "help": "定时发布时间（ISO8601 或 Unix 秒，2h ~ 14天后）；留空为立即发布"
       },
       {
         "name": "caption",
@@ -42740,6 +42741,13 @@
         "default": false,
         "required": false,
         "help": "Save as draft (currently returns unsupported_capability)"
+      },
+      {
+        "name": "timeout",
+        "type": "int",
+        "default": 300,
+        "required": false,
+        "help": "Max seconds for the overall command; upload + YouTube-side processing (the REVIEW step) needs headroom before the visibility step unlocks (default: 300)"
       }
     ],
     "columns": [
