@@ -42152,6 +42152,100 @@
   },
   {
     "site": "xiaohongshu",
+    "name": "publish-video",
+    "description": "小红书发布视频笔记 (creator center UI automation)",
+    "access": "write",
+    "domain": "creator.xiaohongshu.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "video",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "本地视频文件路径 (mp4/mov/m4v/webm)"
+      },
+      {
+        "name": "title",
+        "type": "str",
+        "required": true,
+        "help": "视频标题 (最多20字)"
+      },
+      {
+        "name": "description",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "视频正文/描述"
+      },
+      {
+        "name": "tags",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "话题标签，逗号分隔，不含 # 号；写入正文话题"
+      },
+      {
+        "name": "topics",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "话题标签别名，与 --tags 等价（两者合并去重）"
+      },
+      {
+        "name": "cover",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "视频封面图路径 (当前返回 unsupported_capability)"
+      },
+      {
+        "name": "schedule",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "定时发布时间 (当前返回 unsupported_capability)"
+      },
+      {
+        "name": "account",
+        "type": "str",
+        "default": "",
+        "required": false,
+        "help": "账号选择 (当前返回 unsupported_capability)"
+      },
+      {
+        "name": "draft",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "保存为草稿，不直接发布"
+      },
+      {
+        "name": "timeout",
+        "type": "int",
+        "default": 300,
+        "required": false,
+        "help": "整体命令最大秒数；视频上传+转码需要充足时间 (默认: 300)"
+      }
+    ],
+    "columns": [
+      "ok",
+      "platform",
+      "status",
+      "code",
+      "capability",
+      "message",
+      "url",
+      "draft"
+    ],
+    "type": "js",
+    "modulePath": "xiaohongshu/publish-video.js",
+    "sourceFile": "xiaohongshu/publish-video.js",
+    "navigateBefore": false
+  },
+  {
+    "site": "xiaohongshu",
     "name": "saved",
     "description": "小红书收藏笔记列表",
     "access": "read",
