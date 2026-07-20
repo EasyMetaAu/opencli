@@ -34849,6 +34849,23 @@
   },
   {
     "site": "tiktok",
+    "name": "timezone",
+    "description": "Report the IANA time zone the connected browser profile presents to TikTok",
+    "access": "read",
+    "domain": "www.tiktok.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [],
+    "columns": [
+      "timeZone"
+    ],
+    "type": "js",
+    "modulePath": "tiktok/timezone.js",
+    "sourceFile": "tiktok/timezone.js",
+    "navigateBefore": false
+  },
+  {
+    "site": "tiktok",
     "name": "unfollow",
     "description": "Unfollow a TikTok user by username",
     "access": "write",

@@ -61,6 +61,21 @@ describe('tiktok publish adapter', () => {
         expect(() => __test__.parseScheduleInstant('2000-01-01T00:00:00Z')).toThrow(ArgumentError);
     });
 
+    it('rejects offset-less ISO schedule strings (absolute-instant contract)', () => {
+        // The documented contract is absolute instants only: an ISO string without an
+        // explicit Z/offset would silently resolve in the Node process timezone, which
+        // is exactly the ambiguity the browser-side picker computation must never see.
+        expect(() => __test__.parseScheduleInstant('2099-06-29T17:35:00')).toThrow(ArgumentError);
+        expect(() => __test__.parseScheduleInstant('2099-06-29T17:35')).toThrow(ArgumentError);
+        expect(() => __test__.parseScheduleInstant('2099-06-29T17:35:00.000')).toThrow(ArgumentError);
+        expect(() => __test__.parseScheduleInstant('2099-06-29')).toThrow(ArgumentError);
+        // Explicit numeric offsets and Z stay accepted and resolve to the same absolute
+        // instant on every host, exactly as Date.parse resolves them.
+        expect(__test__.parseScheduleInstant('2099-06-29T17:35:00+08:00').epochMs).toBe(Date.parse('2099-06-29T17:35:00+08:00'));
+        expect(__test__.parseScheduleInstant('2099-06-29T17:35:00-07:00').epochMs).toBe(Date.parse('2099-06-29T17:35:00-07:00'));
+        expect(__test__.parseScheduleInstant('2099-06-29T17:35:00Z').epochMs).toBe(Date.parse('2099-06-29T17:35:00Z'));
+    });
+
     it('drives the schedule picker and reports the read-back slot', async () => {
         const future = new Date(Date.now() + 3 * 3600_000).toISOString();
         const page = pageReturning({

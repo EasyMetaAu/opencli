@@ -54,8 +54,11 @@ function unsupportedForInput(input) {
 // do NOT derive wall-clock fields here: the TikTok Studio picker shows the
 // BROWSER's local time, so the Y/M/D/H/M to select must be computed browser-side
 // from this instant (see setTikTokSchedule), never from the Node process timezone.
-// Accepts ISO8601 (with Z/offset), epoch seconds, or epoch ms. Out-of-window times
+// Accepts ISO8601 (with an explicit Z/offset), epoch seconds, or epoch ms; an
+// offset-less ISO string is rejected because it would silently resolve in the Node
+// process timezone instead of naming an absolute instant. Out-of-window times
 // are not rejected here — the picker snaps them to the nearest available slot.
+const SCHEDULE_OFFSET_SUFFIX = /(?:Z|[+-]\d{2}:?\d{2})$/i;
 function parseScheduleInstant(raw) {
     const s = String(raw ?? '').trim();
     if (!s) throw new ArgumentError('tiktok schedule time is empty');
@@ -63,6 +66,8 @@ function parseScheduleInstant(raw) {
     if (/^\d+$/.test(s)) {
         const n = Number(s);
         epochMs = n < 1e12 ? n * 1000 : n; // seconds vs milliseconds heuristic
+    } else if (!SCHEDULE_OFFSET_SUFFIX.test(s)) {
+        throw new ArgumentError(`tiktok schedule time must be an absolute instant (ISO8601 with an explicit Z/offset, epoch seconds, or epoch ms), got: ${raw}`);
     } else {
         epochMs = new Date(s).getTime();
     }
