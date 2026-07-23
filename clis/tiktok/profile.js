@@ -1,5 +1,6 @@
 import { cli } from '@jackwener/opencli/registry';
-cli({
+
+export const profileCommand = cli({
     site: 'tiktok',
     name: 'profile',
     access: 'read',
@@ -24,17 +25,16 @@ cli({
         'bio',
     ],
     pipeline: [
-        { navigate: { url: 'https://www.tiktok.com/explore', settleMs: 5000 } },
+        { navigate: { url: 'https://www.tiktok.com/@${{ args.username | urlencode }}', settleMs: 8000 } },
         { evaluate: `(async () => {
   const username = \${{ args.username | json }};
-  const res = await fetch('https://www.tiktok.com/@' + encodeURIComponent(username), { credentials: 'include' });
-  if (!res.ok) throw new Error('User not found: ' + username);
-  const html = await res.text();
-  const idx = html.indexOf('__UNIVERSAL_DATA_FOR_REHYDRATION__');
-  if (idx === -1) throw new Error('Could not parse profile data');
-  const start = html.indexOf('>', idx) + 1;
-  const end = html.indexOf('</script>', start);
-  const data = JSON.parse(html.substring(start, end));
+  const script = document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__');
+  if (!script || !script.textContent) {
+    const bodyText = document.body && document.body.innerText || '';
+    if (/Please wait/i.test(bodyText)) throw new Error('TikTok WAF challenge did not finish');
+    throw new Error('Could not parse profile data');
+  }
+  const data = JSON.parse(script.textContent);
   const ud = data['__DEFAULT_SCOPE__'] && data['__DEFAULT_SCOPE__']['webapp.user-detail'];
   const u = ud && ud.userInfo && ud.userInfo.user;
   const s = ud && ud.userInfo && ud.userInfo.stats;
