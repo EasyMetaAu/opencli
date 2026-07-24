@@ -34,6 +34,20 @@ const CAPTION_READY_POLL_MS = 500;
 const SUBMIT_TIMEOUT_MS = 90_000;
 const SUBMIT_POLL_MS = 1500;
 
+const CAPTION_SELECTORS = [
+    '[data-e2e="caption-input"] [contenteditable]:not([contenteditable="false"])',
+    '[data-e2e="caption-input"] textarea',
+    '[data-e2e="caption"] [contenteditable]:not([contenteditable="false"])',
+    '[data-e2e="caption"] textarea',
+    '.public-DraftEditor-content',
+    '[contenteditable]:not([contenteditable="false"])[role="textbox"]',
+    // TikTok has shipped both contenteditable="true" (DraftJS) and
+    // contenteditable="plaintext-only" editors. Match the semantic attribute
+    // instead of pinning the selector to one implementation value.
+    '[contenteditable]:not([contenteditable="false"])',
+    'textarea',
+];
+
 function unsupportedForInput(input) {
     if (input.cover) {
         return unsupportedResult(PLATFORM, 'cover', 'TikTok cover selection is not automated yet; pass no --cover or handle cover manually.');
@@ -133,49 +147,66 @@ async function dismissTikTokDraftRestoreDialog(page) {
     // page loads to setFileInput's own 45s selector wait.
 }
 
+function buildTikTokUploadReadyProbeScript() {
+    return `
+        (() => {
+            ${visibleElementScript()}
+            const text = (document.body?.innerText || document.body?.textContent || '').replace(/\\s+/g, ' ');
+            if (/failed|error|try again|上传失败|处理失败/i.test(text)) {
+                return { error: 'upload', message: text.slice(0, 300) };
+            }
+            // The editor renders before the video bytes finish uploading. Keep the
+            // progress guard, but require the *caption editor* itself as the ready
+            // signal. A loose /post/i button probe also matches TikTok Studio's
+            // left-nav "Posts" control and used to advance this state too early.
+            const uploading = /还剩\\s*\\d|取消\\s*\\d{1,3}\\s*%|\\d+(?:\\.\\d+)?\\s*MB\\s*\\/\\s*\\d|uploading|seconds?\\s*left|\\bremaining\\b/i.test(text);
+            const captionSelectors = ${JSON.stringify(CAPTION_SELECTORS)};
+            let captionSelector = '';
+            for (const selector of captionSelectors) {
+                if (Array.from(document.querySelectorAll(selector)).some(isVisible)) {
+                    captionSelector = selector;
+                    break;
+                }
+            }
+            const submit = Array.from(document.querySelectorAll('[data-e2e="post_video_button"], button, [role="button"]')).find((el) => {
+                if (!isVisible(el) || el.closest('nav, [role="navigation"], aside, a[href]')) return false;
+                if (el.getAttribute('data-e2e') === 'post_video_button') return true;
+                const label = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                return ['post', 'post now', 'publish', 'schedule', 'schedule video', '立即发布', '发布', '预约发布', '定时发布'].includes(label);
+            });
+            return {
+                ok: !uploading && Boolean(captionSelector),
+                uploading,
+                captionSelector,
+                hasSubmit: Boolean(submit),
+                url: location.href,
+            };
+        })()
+    `;
+}
+
 async function waitForUploadReady(page) {
     const deadline = Date.now() + READY_TIMEOUT_MS;
+    let lastState = null;
     while (Date.now() < deadline) {
-        const result = await page.evaluate(`
-            (() => {
-                const text = (document.body?.innerText || '').replace(/\\s+/g, ' ');
-                if (/failed|error|try again|上传失败|处理失败/i.test(text)) {
-                    return { error: 'upload', message: text.slice(0, 300) };
-                }
-                // The editor (caption box + publish button) renders BEFORE the video bytes
-                // finish uploading; clicking publish while still uploading is silently ignored.
-                // So wait for the in-progress UI to clear, e.g. "4.15MB/4.2MB 还剩 0 秒 取消 99%".
-                // Progress markers seen live: zh "4.15MB/4.2MB 还剩 0 秒 取消 99%",
-                // en "42.02MB/42.45MB ... 0 seconds left ... Cancel ... 99%". The MB/MB form is
-                // language-agnostic and only present while uploading (done shows "Uploaded (x)").
-                const uploading = /还剩\\s*\\d|取消\\s*\\d{1,3}\\s*%|\\d+(?:\\.\\d+)?\\s*MB\\s*\\/\\s*\\d|uploading|seconds?\\s*left|\\bremaining\\b/i.test(text);
-                const hasCaption = !!document.querySelector('[contenteditable="true"], textarea, input[type="text"]');
-                const hasPost = Array.from(document.querySelectorAll('button, [role="button"]')).some((el) => {
-                    const label = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
-                    return /post|publish|发布|预约发布|立即发布/i.test(label);
-                });
-                const editorReady = hasCaption || hasPost || /已上传|uploaded|processing complete|publish settings|caption|描述|标题|发布设置/i.test(text);
-                if (!uploading && editorReady) {
-                    return { ok: true };
-                }
-                return null;
-            })()
-        `);
+        const result = await page.evaluate(buildTikTokUploadReadyProbeScript());
+        lastState = result;
         if (result?.ok) return;
         classifyPlatformFailure(PLATFORM, DOMAIN, result, 'TikTok upload failed');
         await page.wait({ time: READY_POLL_MS / 1000 });
     }
-    throwPublishFailure(PUBLISH_ERROR_CODES.uploadFailed, 'TikTok upload did not become editable before timeout');
+    const screenshotPath = '/tmp/tiktok_upload_ready_debug.png';
+    try { await page.screenshot({ path: screenshotPath }); } catch { /* screenshot is best-effort */ }
+    const state = lastState && typeof lastState === 'object'
+        ? JSON.stringify({
+            uploading: Boolean(lastState.uploading),
+            captionSelector: lastState.captionSelector || '',
+            hasSubmit: Boolean(lastState.hasSubmit),
+            url: lastState.url || '',
+        })
+        : 'unavailable';
+    throwPublishFailure(PUBLISH_ERROR_CODES.uploadFailed, `TikTok upload did not become editable before timeout (last state: ${state}); screenshot: ${screenshotPath}`);
 }
-
-const CAPTION_SELECTORS = [
-    '[data-e2e="caption-input"] [contenteditable="true"]',
-    '[data-e2e="caption-input"] textarea',
-    '.public-DraftEditor-content',
-    '[contenteditable="true"][role="textbox"]',
-    '[contenteditable="true"]',
-    'textarea',
-];
 
 // TikTok's caption box is a DraftJS editor: its text lives in React EditorState, NOT the DOM.
 // setNativeText only rewrites textContent, so the model keeps its default (the uploaded file
@@ -204,8 +235,8 @@ async function fillTikTokCaption(page, text) {
             return '';
         })()
     `;
-    // DraftJS can mount a beat after waitForUploadReady's loose signal, especially on a
-    // slower CDP/AdsPower browser, so poll for the editor instead of probing once.
+    // The editor can be replaced during TikTok's upload-to-processing transition,
+    // especially on a slower CDP/AdsPower browser, so poll instead of probing once.
     let sel = '';
     const captionDeadline = Date.now() + CAPTION_READY_TIMEOUT_MS;
     for (;;) {
@@ -214,7 +245,9 @@ async function fillTikTokCaption(page, text) {
         await page.wait({ time: CAPTION_READY_POLL_MS / 1000 });
     }
     if (!sel) {
-        throwPublishFailure(PUBLISH_ERROR_CODES.platformError, 'TikTok caption editor was not found after upload');
+        const screenshotPath = '/tmp/tiktok_caption_debug.png';
+        try { await page.screenshot({ path: screenshotPath }); } catch { /* screenshot is best-effort */ }
+        throwPublishFailure(PUBLISH_ERROR_CODES.platformError, `TikTok caption editor was not found after upload; screenshot: ${screenshotPath}`);
     }
 
     let filled = false;
@@ -759,6 +792,8 @@ export const publishCommand = cli({
 
 export const __test__ = {
     unsupportedForInput,
+    buildTikTokUploadReadyProbeScript,
+    waitForUploadReady,
     fillTikTokCaption,
     waitForTikTokPublishResult,
     parseScheduleInstant,

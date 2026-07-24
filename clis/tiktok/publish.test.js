@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { JSDOM } from 'jsdom';
 import { describe, expect, it } from 'vitest';
 import { getRegistry } from '@jackwener/opencli/registry';
 import { ArgumentError, AuthRequiredError } from '@jackwener/opencli/errors';
@@ -20,6 +21,18 @@ function pageReturning(result) {
         async wait() {},
         async screenshot() { return ''; },
     };
+}
+
+function runUploadReadyProbe(html) {
+    const dom = new JSDOM(`<!doctype html><body>${html}</body>`, {
+        url: 'https://www.tiktok.com/tiktokstudio/upload',
+        runScripts: 'outside-only',
+    });
+    dom.window.HTMLElement.prototype.getBoundingClientRect = () => ({
+        x: 0, y: 0, top: 0, left: 0, right: 200, bottom: 40, width: 200, height: 40,
+        toJSON() { return this; },
+    });
+    return dom.window.eval(__test__.buildTikTokUploadReadyProbeScript());
 }
 
 describe('tiktok publish adapter', () => {
@@ -46,6 +59,29 @@ describe('tiktok publish adapter', () => {
     it('maps auth and platform failures from publish polling to stable codes', async () => {
         await expect(__test__.waitForTikTokPublishResult(pageReturning({ error: 'auth', message: 'login' }))).rejects.toBeInstanceOf(AuthRequiredError);
         await expect(__test__.waitForTikTokPublishResult(pageReturning({ error: 'platform', message: 'upload failed' }))).rejects.toMatchObject({ code: 'platform_error' });
+    });
+
+    it('does not mistake the TikTok Studio Posts navigation control for an upload-ready editor', () => {
+        const result = runUploadReadyProbe('<aside><button>Posts</button></aside>');
+        expect(result).toMatchObject({ ok: false, uploading: false, captionSelector: '', hasSubmit: false });
+    });
+
+    it('recognizes the plaintext-only caption editor used by newer TikTok Studio builds', () => {
+        const result = runUploadReadyProbe(`
+            <div data-e2e="caption-input"><div role="textbox" contenteditable="plaintext-only"></div></div>
+            <button data-e2e="post_video_button">Post</button>
+        `);
+        expect(result).toMatchObject({ ok: true, uploading: false, hasSubmit: true });
+        expect(result.captionSelector).toContain('contenteditable');
+    });
+
+    it('keeps waiting while upload progress is still visible even when the caption has mounted', () => {
+        const result = runUploadReadyProbe(`
+            <p>42.02MB / 42.45MB · 3 seconds left · 99%</p>
+            <div data-e2e="caption-input"><div role="textbox" contenteditable="true"></div></div>
+            <button data-e2e="post_video_button">Post</button>
+        `);
+        expect(result).toMatchObject({ ok: false, uploading: true, hasSubmit: true });
     });
 
     it('parses schedule instants (ISO/epoch) and rejects empty/past/malformed input', () => {
