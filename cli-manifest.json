@@ -44043,9 +44043,9 @@
       {
         "name": "timeout",
         "type": "int",
-        "default": 300,
+        "default": 600,
         "required": false,
-        "help": "Max seconds for the overall command; upload + YouTube-side processing (the REVIEW step) needs headroom before the visibility step unlocks (default: 300)"
+        "help": "Max seconds for the overall command; the wait for YouTube-side processing (the REVIEW step, before the visibility options unlock) is budgeted from whatever is left of this, so raising it genuinely waits longer (default: 600)"
       }
     ],
     "columns": [

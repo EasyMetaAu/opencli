@@ -20,7 +20,6 @@ const FILE_SELECTORS = [
     'input[type="file"][accept*="video"]',
     'input[type="file"]',
 ];
-const UPLOAD_TIMEOUT_MS = 240_000;
 const POLL_MS = 1500;
 const DIALOG_TIMEOUT_MS = 60_000;
 const PUBLISH_TIMEOUT_MS = 120_000;
@@ -236,6 +235,18 @@ async function readWorkflowStep(page) {
             // privacy now" signal.
             const box = (el) => { if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
             const privacyRadio = dlg.querySelector('[name="PUBLIC"], [name="UNLISTED"], [name="PRIVATE"]');
+            // privacyReady means "laid out"; the radio often sits in the DOM at
+            // rect 0×0 long before that. Reporting presence separately is what
+            // lets the pager tell "YouTube is still processing the final step"
+            // apart from "the flow never got there at all".
+            const privacyPresent = !!privacyRadio;
+            // The dialog is Shady DOM and mostly laid out at 0×0, so innerText
+            // reads empty — textContent does not depend on layout, so it is the
+            // only route to any processing/progress copy. Diagnostic only: the
+            // paging decision below never depends on these fields.
+            const dialogText = (dlg.textContent || '').replace(/\s+/g, ' ').trim();
+            const pct = dialogText.match(/(\d{1,3})\s*%/);
+            const progressEl = dlg.querySelector('[role="progressbar"], ytcp-video-upload-progress, paper-progress');
             return {
                 present: true,
                 step: dlg.getAttribute('workflow-step') || '',
@@ -244,6 +255,10 @@ async function readWorkflowStep(page) {
                 doneFound: done.found,
                 doneDisabled: done.disabled,
                 privacyReady: box(privacyRadio),
+                privacyPresent,
+                progressPct: pct ? Number(pct[1]) : null,
+                progressValue: progressEl?.getAttribute('aria-valuenow') || progressEl?.getAttribute('value') || '',
+                progressText: dialogText.slice(0, 200),
             };
         })()
     `);
@@ -381,11 +396,41 @@ async function chooseNotMadeForKids(page, madeForKids) {
     return { ok: false, skipped: true, message: 'made-for-kids radio did not appear' };
 }
 
-// Overall budget for advancing DETAILS → the privacy step. YouTube keeps the
-// Continue button disabled while it processes the upload on the REVIEW step
-// (observed 80s+ on a small clip), so the pager must wait, not fail. Floored at
-// 60s so a misconfig can't shrink it below one processing cycle.
-const NEXT_BUDGET_MS = Math.max(60_000, Number(process.env.OPENCLI_YOUTUBE_NEXT_TIMEOUT_MS) || 240_000);
+// Budget for advancing DETAILS → the privacy step. YouTube keeps the Continue
+// button disabled while it processes the upload on the REVIEW step (observed
+// 80s+ on a small clip), so the pager must wait, not fail.
+const MIN_NEXT_BUDGET_MS = 60_000;
+const DEFAULT_NEXT_BUDGET_MS = 240_000;
+// Tail reserve carved out of --timeout for the steps that follow this one:
+// clickPublish (30s) + PUBLISH_TIMEOUT_MS (120s), plus 10s of slack. Keep this
+// in sync if either of those budgets changes.
+const TAIL_RESERVE_MS = 160_000;
+// Budget for merely REACHING the REVIEW step. Stalling before REVIEW means the
+// flow is stuck upstream (e.g. an unanswered made-for-kids radio keeps
+// #next-button permanently disabled) — waiting out a large --timeout there just
+// delays the same failure, so fail fast and say where it stalled.
+const REACH_REVIEW_BUDGET_MS = 90_000;
+
+/**
+ * Resolve the budget for advanceToPrivacyStep.
+ *
+ * Precedence: explicit env override > the slice of --timeout still unspent >
+ * the 240s default. NEXT_BUDGET_MS used to be a module constant that only read
+ * the env var, so `--timeout 840` had no effect on the inner wait and the pager
+ * always gave up at 240s while the runtime ceiling still had minutes to spare.
+ *
+ * Deriving from --timeout keeps the inner budget strictly below the outer
+ * runtime ceiling (timeout + RUNTIME_TIMEOUT_PADDING_SECONDS, see
+ * src/execution.ts), so an exhausted budget surfaces this adapter's diagnostic
+ * failure instead of the runtime's generic TimeoutError, which carries no DOM state.
+ */
+export function computeNextBudgetMs({ timeoutSec, elapsedMs = 0 } = {}) {
+    const envRaw = Number(process.env.OPENCLI_YOUTUBE_NEXT_TIMEOUT_MS);
+    if (Number.isFinite(envRaw) && envRaw > 0) return Math.max(MIN_NEXT_BUDGET_MS, envRaw);
+    const timeoutMs = Number(timeoutSec) > 0 ? Number(timeoutSec) * 1000 : 0;
+    if (!timeoutMs) return DEFAULT_NEXT_BUDGET_MS;
+    return Math.max(MIN_NEXT_BUDGET_MS, timeoutMs - elapsedMs - TAIL_RESERVE_MS);
+}
 
 /**
  * Advance the upload dialog by clicking #next-button until the visibility radios
@@ -394,23 +439,46 @@ const NEXT_BUDGET_MS = Math.max(60_000, Number(process.env.OPENCLI_YOUTUBE_NEXT_
  * flow — so we page on radio *presence*, not on the workflow-step value. The
  * REVIEW step also keeps Continue disabled while processing (checks show
  * "上传完毕 / 检查完毕" yet the button stays 0×0), which is expected: wait it out.
+ *
+ * Two budgets: REACH_REVIEW_BUDGET_MS to reach REVIEW at all (a stall before it
+ * is an upstream bug, not processing, so fail fast), then the full budgetMs once
+ * REVIEW is confirmed. reachReviewMs is injectable so tests need not burn 90s.
  */
-async function advanceToPrivacyStep(page) {
+async function advanceToPrivacyStep(page, {
+    budgetMs = DEFAULT_NEXT_BUDGET_MS,
+    reachReviewMs = REACH_REVIEW_BUDGET_MS,
+    privacyRadio = null,
+} = {}) {
     const startedAt = Date.now();
+    const reachReviewDeadline = startedAt + reachReviewMs;
+    const processingDeadline = startedAt + budgetMs;
+    // Two tiers, mirroring clickTikTokPublish's sawDisabled pattern: a tight
+    // budget to reach REVIEW at all, then the full budget once the final step is
+    // confirmed and the wait is genuinely YouTube-side processing.
+    let sawReview = false;
     let lastStep = '';
+    let lastProbe = null;
     let ticks = 0;
-    while (Date.now() - startedAt < NEXT_BUDGET_MS) {
+    while (true) {
+        // min() so a small --timeout is never inflated by the reach-REVIEW floor.
+        const deadline = sawReview ? processingDeadline : Math.min(reachReviewDeadline, processingDeadline);
+        if (Date.now() >= deadline) break;
+
         const probe = await readWorkflowStep(page);
         if (!probe?.present) {
             throwPublishFailure(PUBLISH_ERROR_CODES.platformError, 'YouTube upload dialog closed before the visibility step was reached');
         }
+        lastProbe = probe;
         lastStep = probe.step || lastStep;
+        // REVIEW, or a privacy radio already mounted (even at 0×0), both mean
+        // the final step is up and the remaining wait is server-side processing.
+        if (probe.step === 'REVIEW' || probe.privacyPresent) sawReview = true;
         // Reached the final step: the privacy radios are on screen.
         if (probe.privacyReady) return probe;
 
         // Log sparsely (every ~10 ticks) so the tail shows where it's stuck.
         if (ticks % 10 === 0) {
-            debugPublish(`advanceToPrivacyStep: step=${probe.step} nextFound=${probe.nextFound} nextDisabled=${probe.nextDisabled} privacyReady=${probe.privacyReady} t=${Math.round((Date.now() - startedAt) / 1000)}s`);
+            debugPublish(`advanceToPrivacyStep: step=${probe.step} nextFound=${probe.nextFound} nextDisabled=${probe.nextDisabled} privacyPresent=${probe.privacyPresent} privacyReady=${probe.privacyReady} progress=${probe.progressPct ?? probe.progressValue ?? ''} t=${Math.round((Date.now() - startedAt) / 1000)}s`);
         }
         ticks += 1;
 
@@ -433,16 +501,44 @@ async function advanceToPrivacyStep(page) {
         if (ticks % 10 === 1) debugPublish(`advanceToPrivacyStep: click result=${JSON.stringify(clicked)}`);
         await page.wait({ time: 1.2 });
     }
+    // Last resort before giving up: the radio is in the DOM and only the layout
+    // is missing. clickAndVerifyYouTubeRadio's attr pass ignores rect and reads
+    // aria-checked back, so a failure here cannot produce a false "selected" —
+    // an unconfirmed click just falls through to the timeout below.
+    if (privacyRadio && lastProbe?.privacyPresent && !lastProbe?.privacyReady) {
+        const rescued = await clickAndVerifyYouTubeRadio(page, { ...privacyRadio, required: false }).catch(() => null);
+        if (rescued?.ok) {
+            debugPublish(`advanceToPrivacyStep: rescued a rect-0 privacy radio after ${Math.round((Date.now() - startedAt) / 1000)}s`);
+            return { ...lastProbe, privacyRescued: true };
+        }
+    }
+
     const waitedS = Math.round((Date.now() - startedAt) / 1000);
+    const screenshotPath = '/tmp/youtube_visibility_debug.png';
+    try { await page.screenshot({ path: screenshotPath }); } catch { /* screenshot is best-effort */ }
+    const state = JSON.stringify({
+        step: lastStep || 'unknown',
+        nextFound: Boolean(lastProbe?.nextFound),
+        nextDisabled: Boolean(lastProbe?.nextDisabled),
+        doneFound: Boolean(lastProbe?.doneFound),
+        privacyPresent: Boolean(lastProbe?.privacyPresent),
+        privacyReady: Boolean(lastProbe?.privacyReady),
+        progress: lastProbe?.progressPct ?? lastProbe?.progressValue ?? '',
+        sawReview,
+    });
+    // Point at the lever that actually applies: raising the timeout only helps
+    // when the wait really is REVIEW-step processing.
+    const hint = sawReview
+        ? 'the video is likely still processing — raise --timeout (or OPENCLI_YOUTUBE_NEXT_TIMEOUT_MS) to wait longer'
+        : 'the dialog never reached the REVIEW step — check the details / made-for-kids step rather than raising the timeout';
     throwPublishFailure(
         PUBLISH_ERROR_CODES.platformError,
-        `YouTube visibility options did not appear after ${waitedS}s (last step "${lastStep || 'unknown'}"); the video may still be processing. Raise OPENCLI_YOUTUBE_NEXT_TIMEOUT_MS to wait longer.`,
+        `YouTube visibility options did not appear after ${waitedS}s (last state: ${state}); ${hint}; screenshot: ${screenshotPath}`,
     );
 }
 
-async function goThroughChecks(page, privacy) {
+async function goThroughChecks(page, privacy, { budgetMs = DEFAULT_NEXT_BUDGET_MS, reachReviewMs } = {}) {
     await chooseNotMadeForKids(page, false);
-    await advanceToPrivacyStep(page);
 
     const nameSelectors = privacy === 'private'
         ? ['[name="PRIVATE"]']
@@ -454,7 +550,13 @@ async function goThroughChecks(page, privacy) {
         : privacy === 'unlisted'
             ? ['Unlisted', '不公开列出']
             : ['Public', '公开'];
-    await clickAndVerifyYouTubeRadio(page, { nameSelectors, labels, settingName: 'privacy', required: true });
+
+    const privacyRadio = { nameSelectors, labels, settingName: 'privacy' };
+    const reached = await advanceToPrivacyStep(page, { budgetMs, reachReviewMs, privacyRadio });
+    // The rescue path already clicked and verified the radio; re-clicking would
+    // toggle nothing but wastes a round-trip, so skip it.
+    if (reached?.privacyRescued) return;
+    await clickAndVerifyYouTubeRadio(page, { ...privacyRadio, required: true });
 }
 
 async function clickPublish(page) {
@@ -519,10 +621,11 @@ export const publishCommand = cli({
         { name: 'privacy', default: 'public', choices: ['public', 'unlisted', 'private'], help: 'YouTube visibility' },
         { name: 'account', default: '', help: 'Channel/account selector (currently returns unsupported_capability)' },
         { name: 'draft', type: 'bool', default: false, help: 'Save as draft (currently returns unsupported_capability)' },
-        { name: 'timeout', type: 'int', default: 300, help: 'Max seconds for the overall command; upload + YouTube-side processing (the REVIEW step) needs headroom before the visibility step unlocks (default: 300)' },
+        { name: 'timeout', type: 'int', default: 600, help: 'Max seconds for the overall command; the wait for YouTube-side processing (the REVIEW step, before the visibility options unlock) is budgeted from whatever is left of this, so raising it genuinely waits longer (default: 600)' },
     ],
     columns: ['ok', 'platform', 'status', 'code', 'capability', 'message', 'url', 'draft'],
     func: async (page, kwargs) => {
+        const startedAt = Date.now();
         const input = validateVideoPublishInput(kwargs, PLATFORM, {
             maxTitleLength: 100,
             maxDescriptionLength: 5000,
@@ -540,7 +643,11 @@ export const publishCommand = cli({
 
         const description = buildDescriptionWithTags(input.description, input.tags);
         await fillYouTubeDetails(page, input.title, description);
-        await goThroughChecks(page, input.privacy);
+        // Charge the wait for YouTube-side processing against what is left of
+        // --timeout, not a fixed constant, so raising --timeout actually waits longer.
+        await goThroughChecks(page, input.privacy, {
+            budgetMs: computeNextBudgetMs({ timeoutSec: kwargs.timeout, elapsedMs: Date.now() - startedAt }),
+        });
         await clickPublish(page);
         const publishResult = await waitForYouTubePublishResult(page, input.privacy);
 
@@ -553,6 +660,7 @@ export const publishCommand = cli({
 
 export const __test__ = {
     unsupportedForInput,
+    computeNextBudgetMs,
     fillYouTubeDetails,
     readWorkflowStep,
     chooseNotMadeForKids,

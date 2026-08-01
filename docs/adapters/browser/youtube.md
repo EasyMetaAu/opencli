@@ -82,6 +82,20 @@ Capability matrix:
 
 Typed failures: invalid file/title/tag input raises `ArgumentError`; missing or expired login raises `AuthRequiredError`; missing browser upload support returns `browser_unsupported`; upload input/file-transfer failures return `upload_failed`; Studio UI/platform state failures return `platform_error`. This gives service callers stable success, relogin, unsupported capability, validation, upload, browser-capability, and platform-failure branches without parsing browser logs.
 
+### Timeouts and processing waits
+
+The visibility (privacy) radios live on Studio's final **REVIEW** step, and YouTube keeps them unusable while it processes the upload server-side. Large or slow-to-transcode videos can sit there for several minutes, so `publish` waits it out rather than failing.
+
+That wait is budgeted from `--timeout` (default 600s): the adapter reserves time for the publish click and result confirmation, and spends the remainder waiting for the visibility step. **Raising `--timeout` genuinely extends the processing wait** — a large upload that timed out at the default is usually fixed with `--timeout 900`.
+
+| Lever | Effect |
+|-------|--------|
+| `--timeout <seconds>` | Overall command budget; the visibility-step wait is derived from what's left of it |
+| `OPENCLI_YOUTUBE_NEXT_TIMEOUT_MS` | Explicit override for the visibility-step wait only; takes precedence over the `--timeout`-derived value (floored at 60s) |
+| `OPENCLI_DEBUG_PUBLISH=1` | Streams step-by-step progress to stderr (`workflow-step`, button state, processing progress) |
+
+On timeout the error reports the last observed dialog state and writes a screenshot to `/tmp/youtube_visibility_debug.png`. Read the hint before reaching for a larger timeout: if the dialog **never reached the REVIEW step**, the flow stalled earlier (typically the mandatory made-for-kids answer keeping Continue disabled) and waiting longer will not help.
+
 ## Prerequisites
 
 - Chrome running and **logged into** youtube.com / studio.youtube.com
