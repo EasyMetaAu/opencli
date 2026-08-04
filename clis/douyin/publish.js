@@ -30,7 +30,31 @@ const VISIBILITY_MAP = {
 };
 const IMAGEX_BASE = 'https://imagex.bytedanceapi.com';
 const IMAGEX_SERVICE_ID = '1147';
-const DEVICE_PARAMS = 'aid=1128&cookie_enabled=true&screen_width=1512&screen_height=982&browser_language=zh-CN&browser_platform=MacIntel&browser_name=Mozilla&browser_online=true&timezone_name=Asia%2FTokyo&support_h265=1';
+// 读浏览器指纹失败时的兜底(时区用大陆而非东京——抖音多为大陆号)
+const FALLBACK_DEVICE_PARAMS = {
+    timeZone: 'Asia/Shanghai',
+    language: 'zh-CN',
+    width: 1512,
+    height: 982,
+    platform: 'MacIntel',
+};
+// create_v2 的设备指纹 query。timezone_name 等必须与所驱动浏览器的真实指纹一致,
+// 否则抖音风控会交叉比对失败返回 403(空 body)。故运行时从 page 实时读,不写死。
+export function buildDeviceParams(fp) {
+    const q = new URLSearchParams({
+        aid: '1128',
+        cookie_enabled: 'true',
+        screen_width: String(fp.width || FALLBACK_DEVICE_PARAMS.width),
+        screen_height: String(fp.height || FALLBACK_DEVICE_PARAMS.height),
+        browser_language: fp.language || FALLBACK_DEVICE_PARAMS.language,
+        browser_platform: fp.platform || FALLBACK_DEVICE_PARAMS.platform,
+        browser_name: 'Mozilla',
+        browser_online: 'true',
+        timezone_name: fp.timeZone || FALLBACK_DEVICE_PARAMS.timeZone,
+        support_h265: '1',
+    });
+    return q.toString();
+}
 const DEFAULT_COVER_TOOLS_INFO = JSON.stringify({
     video_cover_source: 2,
     cover_timestamp: 0,
@@ -319,7 +343,21 @@ cli({
                 declare: { user_declare_info: '{}' },
             },
         };
-        const publishUrl = `https://creator.douyin.com/web/api/media/aweme/create_v2/?read_aid=2906&${DEVICE_PARAMS}`;
+        // 实时读浏览器真实指纹拼设备参数,避免与浏览器时区不符被风控 403
+        let fp;
+        try {
+            fp = await page.evaluate(() => ({
+                timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                language: navigator.language,
+                width: screen.width,
+                height: screen.height,
+                platform: navigator.platform,
+            }));
+        }
+        catch {
+            fp = { ...FALLBACK_DEVICE_PARAMS };
+        }
+        const publishUrl = `https://creator.douyin.com/web/api/media/aweme/create_v2/?read_aid=2906&${buildDeviceParams(fp)}`;
         process.stderr.write(isScheduled ? '  创建定时发布...\n' : '  立即发布...\n');
         const publishRes = (await browserFetch(page, 'POST', publishUrl, {
             body: publishBody,
@@ -331,7 +369,7 @@ cli({
         const url = `https://www.douyin.com/video/${awemeId}`;
         const publishTimeStr = isScheduled
             ? new Date(timingTs * 1000).toLocaleString('zh-CN', {
-                timeZone: 'Asia/Tokyo',
+                timeZone: fp.timeZone || FALLBACK_DEVICE_PARAMS.timeZone,
             })
             : '立即发布';
         return [
