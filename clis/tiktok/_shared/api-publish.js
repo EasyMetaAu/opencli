@@ -20,6 +20,8 @@
 
 import { AuthRequiredError, CommandExecutionError } from '@jackwener/opencli/errors';
 
+class ApiPublishRejectedError extends CommandExecutionError {}
+
 const POST_API_PATH = '/tiktok/web/project/post/v1/';
 const CONTENT_CHECK_PATH = '/tiktok/v1/creator/content/check/create';
 
@@ -36,7 +38,7 @@ const VISIBILITY_TYPE = { public: 0, friends: 1, private: 2 };
  * Returns the parsed JSON (page-context), or a sentinel object on transport error.
  * Mirrors douyin/_shared/browser-fetch.js but tuned for TikTok's status envelope.
  */
-async function pageFetchJson(page, method, path, body) {
+async function pageFetchJson(page, method, path, body, { write = false } = {}) {
     const js = `
     (async () => {
       try {
@@ -78,7 +80,8 @@ async function pageFetchJson(page, method, path, body) {
         if (code === 401 || code === 403 || /login|cookie|auth|captcha|verify|forbidden|permission|登录|登陆|权限|验证/i.test(String(msg))) {
             throw new AuthRequiredError(DOMAIN_FOR_AUTH, `TikTok API auth/permission error ${code} (${method} ${path}): ${msg}`);
         }
-        throw new CommandExecutionError(`TikTok API error ${code} (${method} ${path}): ${msg}`);
+        const ErrorType = write ? ApiPublishRejectedError : CommandExecutionError;
+        throw new ErrorType(`TikTok API error ${code} (${method} ${path}): ${msg}`);
     }
     return json;
 }
@@ -110,7 +113,9 @@ function installVidHookScript() {
       try {
         if (window.__ttVidHookInstalled) return { already: true };
         window.__ttUploadVid = window.__ttUploadVid || null;
-        const grab = (text) => {
+        window.__ttUploadProgress = window.__ttUploadProgress || null;
+        const grab = (text, attempt) => {
+          if (window.__ttUploadAttempt !== attempt) return;
           if (!text || text.indexOf('post_upload_resp') === -1) return;
           try {
             const j = JSON.parse(text);
@@ -126,14 +131,15 @@ function installVidHookScript() {
         const isTos = (u) => typeof u === 'string' && u.indexOf('/upload/v1/tos-') !== -1;
         // fetch
         const of = window.fetch;
-        if (of) {
-          window.fetch = function (...a) {
-            const u = (a[0] && a[0].url) || String(a[0] || '');
-            return of.apply(this, a).then((res) => {
-              if (isTos(u)) { try { res.clone().text().then(grab).catch(() => {}); } catch (e) {} }
-              return res;
-            });
-          };
+          if (of) {
+            window.fetch = function (...a) {
+              const u = (a[0] && a[0].url) || String(a[0] || '');
+              const attempt = window.__ttUploadAttempt;
+              return of.apply(this, a).then((res) => {
+                if (isTos(u)) { try { res.clone().text().then((text) => grab(text, attempt)).catch(() => {}); } catch (e) {} }
+                return res;
+              });
+            };
         }
         // XMLHttpRequest (webmssdk uploader uses XHR)
         const OX = window.XMLHttpRequest;
@@ -142,8 +148,28 @@ function installVidHookScript() {
           const oSend = OX.prototype.send;
           OX.prototype.open = function (method, url) { this.__ttUrl = url; return oOpen.apply(this, arguments); };
           OX.prototype.send = function () {
+            const attempt = window.__ttUploadAttempt;
+            let requestLoaded = 0;
+            if (isTos(this.__ttUrl) && this.upload) {
+              this.upload.addEventListener('progress', (event) => {
+                if (window.__ttUploadAttempt !== attempt) return;
+                const nextRequestLoaded = Math.max(0, Number(event.loaded) || 0);
+                const delta = Math.max(0, nextRequestLoaded - requestLoaded);
+                requestLoaded = Math.max(requestLoaded, nextRequestLoaded);
+                if (delta === 0) return;
+                const previous = window.__ttUploadProgress || { loaded: 0, total: 0 };
+                const aggregateLoaded = (Number(previous.loaded) || 0) + delta;
+                window.__ttUploadProgress = {
+                  loaded: aggregateLoaded,
+                  total: event.lengthComputable
+                    ? Math.max(Number(previous.total) || 0, Number(event.total) || 0, aggregateLoaded)
+                    : (Number(previous.total) || 0),
+                  updatedAt: Date.now(),
+                };
+              });
+            }
             this.addEventListener('load', function () {
-              try { if (isTos(this.__ttUrl)) grab(this.responseText); } catch (e) {}
+              try { if (isTos(this.__ttUrl)) grab(this.responseText, attempt); } catch (e) {}
             });
             return oSend.apply(this, arguments);
           };
@@ -162,11 +188,41 @@ export async function installVidHook(page) {
     return r;
 }
 
+function resetUploadCaptureScript(attemptId) {
+    return `(() => {
+      window.__ttUploadAttempt = ${JSON.stringify(attemptId)};
+      window.__ttUploadVid = null;
+      window.__ttUploadProgress = null;
+      return { attemptId: window.__ttUploadAttempt };
+    })()`;
+}
+
+export async function resetUploadCapture(page, attemptId) {
+    await page.evaluate(resetUploadCaptureScript(attemptId));
+    return attemptId;
+}
+
 /** Read the vid captured by the page hook, or null. */
 async function readCapturedVid(page) {
-    let r = await page.evaluate('window.__ttUploadVid || null');
+    const snapshot = await readUploadSnapshot(page);
+    return snapshot.video;
+}
+
+export async function readUploadSnapshot(page) {
+    let r = await page.evaluate(`({
+      video: window.__ttUploadVid || null,
+      progress: window.__ttUploadProgress || null,
+      attemptId: window.__ttUploadAttempt || '',
+    })`);
     if (r && typeof r === 'object' && 'session' in r && 'data' in r) r = r.data;
-    return r && r.video_id ? r : null;
+    if (r?.video_id) return { video: r, progress: null, attemptId: '' };
+    return {
+        video: r?.video?.video_id ? r.video : null,
+        progress: r?.progress && Number.isFinite(Number(r.progress.loaded))
+            ? { loaded: Number(r.progress.loaded), total: Number(r.progress.total) || 0, updatedAt: Number(r.progress.updatedAt) || 0 }
+            : null,
+        attemptId: typeof r?.attemptId === 'string' ? r.attemptId : '',
+    };
 }
 
 /** Build the TikTok-specific text_extra + markup_text from caption + hashtags.
@@ -267,16 +323,24 @@ export async function contentCheck(page, videoId) {
  * POST the publish request. Returns { item_id, project_id }.
  */
 export async function projectPost(page, body) {
-    const json = await pageFetchJson(page, 'POST', `${POST_API_PATH}?${POST_QUERY}`, body);
+    let json;
+    try {
+        json = await pageFetchJson(page, 'POST', `${POST_API_PATH}?${POST_QUERY}`, body, { write: true });
+    } catch (error) {
+        if (error instanceof ApiPublishRejectedError || error instanceof AuthRequiredError) {
+            return { outcome: 'rejected', message: error.message };
+        }
+        return { outcome: 'unknown', message: error instanceof Error ? error.message : String(error) };
+    }
     const resp = json?.single_post_resp_list?.[0];
+    if (resp?.status_code !== undefined && resp.status_code !== 0) {
+        return { outcome: 'rejected', message: `TikTok publish per-item error ${resp.status_code}: ${resp.status_msg || ''}` };
+    }
     const itemId = resp?.item_id;
     if (!itemId) {
-        throw new CommandExecutionError(`TikTok publish returned no item_id: ${JSON.stringify(json).slice(0, 400)}`);
+        return { outcome: 'unknown', message: `TikTok publish returned no item_id: ${JSON.stringify(json).slice(0, 400)}` };
     }
-    if (resp.status_code !== undefined && resp.status_code !== 0) {
-        throw new CommandExecutionError(`TikTok publish per-item error ${resp.status_code}: ${resp.status_msg || ''}`);
-    }
-    return { item_id: itemId, project_id: json?.project_id ?? '' };
+    return { outcome: 'succeeded', item_id: itemId, project_id: json?.project_id ?? '' };
 }
 
 /**
@@ -284,14 +348,14 @@ export async function projectPost(page, body) {
  * Requires installVidHook(page) to have been called BEFORE the upload was triggered.
  * Returns { video_id, width, height, duration }.
  */
-export async function waitForVideoId(page, { timeoutMs = 180_000, pollMs = 1500 } = {}) {
-    const deadline = Date.now() + timeoutMs;
+export async function waitForVideoId(page, { timeoutMs = 180_000, deadlineAt = Date.now() + timeoutMs, pollMs = 1500 } = {}) {
+    const deadline = deadlineAt;
     while (Date.now() < deadline) {
         const info = await readCapturedVid(page).catch(() => null);
         if (info && info.video_id) return info;
-        await page.wait({ time: pollMs / 1000 });
+        await page.wait({ time: Math.min(pollMs, Math.max(0, deadline - Date.now())) / 1000 });
     }
     throw new CommandExecutionError('TikTok upload did not yield a video_id (no TOS finish response seen before timeout)');
 }
 
-export const __test__ = { buildTextExtra, VISIBILITY_TYPE };
+export const __test__ = { buildTextExtra, VISIBILITY_TYPE, installVidHookScript, resetUploadCaptureScript };
