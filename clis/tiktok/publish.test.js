@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { JSDOM } from 'jsdom';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { getRegistry } from '@jackwener/opencli/registry';
 import { ArgumentError, AuthRequiredError } from '@jackwener/opencli/errors';
 import { publishCommand, __test__ } from './publish.js';
@@ -119,6 +119,24 @@ describe('tiktok publish adapter', () => {
         expect(shots[0]?.path).toContain('/tmp/');
     });
 
+    it('fails before writing when schedule setup crosses the shared pre-write deadline', async () => {
+        let now = 1_000;
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
+        const page = {
+            async evaluateWithArgs() {
+                now += 1_000;
+                return { ok: true, selectedDate: '2026-08-08', selectedTime: '12:00', tz: 'Asia/Shanghai' };
+            },
+            async screenshot() {},
+        };
+        const future = new Date('2026-08-08T12:00:00+08:00').toISOString();
+        try {
+            await expect(__test__.setTikTokSchedule(page, future, 1_500)).rejects.toMatchObject({ code: 'platform_error' });
+        } finally {
+            vi.restoreAllMocks();
+        }
+    });
+
     it('rejects a past/invalid schedule before touching the browser', async () => {
         let touched = false;
         const page = {
@@ -143,6 +161,7 @@ describe('tiktok publish — API path with DOM fallback', () => {
     // `vid` is the captured video info (or null to simulate a failed upload capture).
     function apiPage({ vid, postResponse }) {
         const calls = { setFileInput: 0, evaluate: 0, domCaptionOrPicker: 0 };
+        let activeAttemptId = '';
         const page = {
             async goto() {},
             async setFileInput() { calls.setFileInput += 1; },
@@ -152,11 +171,16 @@ describe('tiktok publish — API path with DOM fallback', () => {
             async evaluate(js) {
                 calls.evaluate += 1;
                 const s = String(js);
+                if (s.includes('window.__ttUploadAttempt =')) {
+                    const match = s.match(/window\.__ttUploadAttempt\s*=\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/);
+                    activeAttemptId = match ? JSON.parse(match[1].replaceAll("'", '"')) : 'mock-attempt';
+                    return { attemptId: activeAttemptId };
+                }
                 // publish/check fetches run through evaluate → success envelope
                 if (s.includes('project/post/v1')) return { __http: 200, __json: postResponse };
                 if (s.includes('content/check/create')) return { __http: 200, __json: { check_ids: {}, status_code: 0 } };
                 // vid hook read
-                if (s.includes('__ttUploadVid')) return vid || null;
+                if (s.includes('__ttUploadVid')) return vid ? { video: vid, attemptId: activeAttemptId } : { video: null, attemptId: activeAttemptId };
                 // vid hook install
                 if (s.includes('__ttVidHookInstalled')) return { installed: true };
                 // login check → logged in
@@ -210,6 +234,291 @@ describe('tiktok publish — API path with DOM fallback', () => {
         });
         await expect(publishCommand.func(page, { video: tempVideoLocal(), title: 'x', mode: 'api' }))
             .rejects.toMatchObject({ code: 'platform_error' });
+    });
+
+    it('never falls back to DOM after the API write starts and its response is lost', async () => {
+        const { page, calls } = apiPage({
+            vid: { video_id: 'v12025gd0000dTEST0000000000000000' },
+            postResponse: { status_code: 0 },
+        });
+        let activeAttemptId = '';
+        page.evaluate = vi.fn(async (js) => {
+            const s = String(js);
+            if (s.includes('window.__ttUploadAttempt =')) {
+                const match = s.match(/window\.__ttUploadAttempt\s*=\s*("(?:[^"\\]|\\.)*")/);
+                activeAttemptId = match ? JSON.parse(match[1]) : 'mock-attempt';
+                return { attemptId: activeAttemptId };
+            }
+            if (s.includes('project/post/v1')) throw new Error('connection reset after dispatch');
+            if (s.includes('__ttUploadVid')) return { video: { video_id: 'v12025gd0000dTEST0000000000000000' }, attemptId: activeAttemptId };
+            if (s.includes('__ttVidHookInstalled')) return { installed: true };
+            if (s.includes('loginLike') || (s.includes('location.href') && s.includes('input[type="file"]'))) return { ok: true };
+            if (s.includes('draftRestoreGuard')) return { present: false, settled: true };
+            calls.domCaptionOrPicker += 1;
+            throw new Error('DOM fallback must not run');
+        });
+
+        const rows = await publishCommand.func(page, { video: tempVideoLocal(), title: 'hi', mode: 'auto', timeout: 180 });
+
+        expect(rows[0]).toMatchObject({ ok: false, status: 'unknown', code: 'publish_outcome_unknown' });
+        expect(calls.domCaptionOrPicker).toBe(0);
+        expect(page.evaluate.mock.calls.filter(([script]) => String(script).includes('project/post/v1'))).toHaveLength(1);
+    });
+
+    it('uses one shared upload wait beyond 180s while XHR progress keeps advancing', async () => {
+        let now = 1_000;
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
+        const snapshots = [
+            { progress: { loaded: 10, total: 100 } },
+            { progress: { loaded: 40, total: 100 } },
+            { progress: { loaded: 70, total: 100 } },
+            { video: { video_id: 'vid-after-240s' }, progress: { loaded: 100, total: 100 } },
+        ];
+        let read = 0;
+        const page = {
+            async evaluate(script) {
+                if (String(script).includes('__ttUploadProgress')) {
+                    return snapshots[Math.min(read++, snapshots.length - 1)];
+                }
+                return { ok: false, uploading: true };
+            },
+            async wait({ time }) { now += time * 1000; },
+        };
+
+        try {
+            const route = await __test__.waitForPublishRoute(page, {
+                mode: 'auto',
+                deadlineAt: now + 300_000,
+                pollMs: 80_000,
+                stallMs: 90_000,
+            });
+            expect(route).toMatchObject({ kind: 'api', video: { video_id: 'vid-after-240s' } });
+        } finally {
+            vi.restoreAllMocks();
+        }
+    });
+
+    it('resets upload capture before every file injection', async () => {
+        let reset = false;
+        let activeAttemptId = '';
+        const page = {
+            async goto() {},
+            async setFileInput() { expect(reset).toBe(true); },
+            async wait() {},
+            async evaluate(script) {
+                const s = String(script);
+                if (s.includes('window.__ttUploadAttempt =')) {
+                    reset = true;
+                    const match = s.match(/window\.__ttUploadAttempt\s*=\s*("(?:[^"\\]|\\.)*")/);
+                    activeAttemptId = match ? JSON.parse(match[1]) : 'new';
+                    return { attemptId: activeAttemptId };
+                }
+                if (s.includes('project/post/v1')) return { __http: 200, __json: { status_code: 0, single_post_resp_list: [{ item_id: '1', status_code: 0 }] } };
+                if (s.includes('__ttUploadProgress')) return { video: { video_id: 'vid' }, progress: null, attemptId: activeAttemptId };
+                if (s.includes('loginLike')) return { ok: true };
+                if (s.includes('draftRestoreGuard')) return { present: false, settled: true };
+                return { installed: true };
+            },
+        };
+
+        await expect(publishCommand.func(page, { video: tempVideoLocal(), title: 'hi', mode: 'api', timeout: 180 }))
+            .resolves.toMatchObject([{ ok: true }]);
+    });
+
+    it('fails before writing when XHR upload progress stalls for 90s', async () => {
+        let now = 1_000;
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
+        const page = {
+            async evaluate(script) {
+                if (String(script).includes('__ttUploadProgress')) {
+                    return { progress: { loaded: 10, total: 100 } };
+                }
+                return { ok: false, uploading: true };
+            },
+            async wait({ time }) { now += time * 1000; },
+        };
+
+        try {
+            await expect(__test__.waitForPublishRoute(page, {
+                mode: 'auto',
+                deadlineAt: now + 300_000,
+                pollMs: 30_000,
+                stallMs: 90_000,
+            })).rejects.toMatchObject({ code: 'upload_failed' });
+        } finally {
+            vi.restoreAllMocks();
+        }
+    });
+
+    it('does not extend the legacy 180s wait when no XHR progress signal is available', async () => {
+        let now = 1_000;
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
+        const page = {
+            async evaluate(script) {
+                if (String(script).includes('__ttUploadProgress')) return { video: null, progress: null };
+                return { ok: false, uploading: true };
+            },
+            async wait({ time }) { now += time * 1000; },
+        };
+
+        try {
+            await expect(__test__.waitForPublishRoute(page, {
+                mode: 'auto',
+                deadlineAt: now + 300_000,
+                pollMs: 60_000,
+                stallMs: 90_000,
+            })).rejects.toMatchObject({ code: 'upload_failed' });
+            expect(now).toBeLessThanOrEqual(181_000);
+        } finally {
+            vi.restoreAllMocks();
+        }
+    });
+
+    it('does not treat a backwards loaded value as upload progress', async () => {
+        let now = 1_000;
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
+        const loaded = [50, 40, 40, 40];
+        let read = 0;
+        const page = {
+            async evaluate(script) {
+                if (String(script).includes('__ttUploadProgress')) {
+                    return { progress: { loaded: loaded[Math.min(read++, loaded.length - 1)], total: 100 } };
+                }
+                return { ok: false, uploading: true };
+            },
+            async wait({ time }) { now += time * 1000; },
+        };
+
+        try {
+            await expect(__test__.waitForPublishRoute(page, {
+                mode: 'auto', deadlineAt: now + 300_000, pollMs: 30_000, stallMs: 90_000,
+            })).rejects.toMatchObject({ code: 'upload_failed' });
+            expect(now).toBe(91_000);
+        } finally {
+            vi.restoreAllMocks();
+        }
+    });
+
+    it('uses newer progress events even when a chunk loaded counter restarts', async () => {
+        let now = 1_000;
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
+        const snapshots = [
+            { progress: { loaded: 100, total: 100, updatedAt: 1_000 } },
+            { progress: { loaded: 10, total: 100, updatedAt: 31_000 } },
+            { progress: { loaded: 20, total: 100, updatedAt: 61_000 } },
+        ];
+        let read = 0;
+        const page = {
+            async evaluate(script) {
+                if (String(script).includes('__ttUploadProgress')) {
+                    return snapshots[Math.min(read++, snapshots.length - 1)];
+                }
+                return { ok: false, uploading: true };
+            },
+            async wait({ time }) { now += time * 1000; },
+        };
+
+        try {
+            await expect(__test__.waitForPublishRoute(page, {
+                mode: 'api',
+                deadlineAt: now + 300_000,
+                pollMs: 30_000,
+                stallMs: 90_000,
+            })).rejects.toMatchObject({ code: 'upload_failed' });
+            expect(now).toBeGreaterThanOrEqual(151_000);
+        } finally {
+            vi.restoreAllMocks();
+        }
+    });
+
+    it('rejects a captured video id when the current upload attempt identity is missing', async () => {
+        let now = 1_000;
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
+        const page = {
+            async evaluate(script) {
+                if (String(script).includes('__ttUploadProgress')) {
+                    return { video: { video_id: 'stale-video-id' }, progress: null, attemptId: '' };
+                }
+                return { ok: false, uploading: true };
+            },
+            async wait({ time }) { now += time * 1000; },
+        };
+
+        try {
+            await expect(__test__.waitForPublishRoute(page, {
+                mode: 'api',
+                attemptId: 'current-attempt',
+                deadlineAt: now + 2_000,
+                pollMs: 1_000,
+            })).rejects.toMatchObject({ code: 'upload_failed' });
+        } finally {
+            vi.restoreAllMocks();
+        }
+    });
+
+    it('keeps about 40% of an explicit long timeout for DOM preparation and receipt', () => {
+        expect(__test__.publishDeadlines(840_000, 1_000)).toMatchObject({
+            deadlineAt: 841_000,
+            uploadDeadlineAt: 505_000,
+        });
+        expect(__test__.publishDeadlines(180_000, 1_000)).toMatchObject({
+            deadlineAt: 181_000,
+            uploadDeadlineAt: 181_000,
+        });
+    });
+
+    it('does not unlock the long upload budget from progress with a non-positive total', async () => {
+        let now = 1_000;
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
+        let loaded = 0;
+        const page = {
+            async evaluate(script) {
+                if (String(script).includes('__ttUploadProgress')) {
+                    loaded += 10;
+                    return { progress: { loaded, total: 0 } };
+                }
+                return { ok: false, uploading: true };
+            },
+            async wait({ time }) { now += time * 1000; },
+        };
+        try {
+            await expect(__test__.waitForPublishRoute(page, {
+                mode: 'auto', deadlineAt: now + 300_000, pollMs: 60_000, stallMs: 90_000,
+            })).rejects.toMatchObject({ code: 'upload_failed' });
+            expect(now).toBeLessThanOrEqual(181_000);
+        } finally {
+            vi.restoreAllMocks();
+        }
+    });
+
+    it('keeps the file-selector wait capped at 45s even with a long command budget', async () => {
+        let now = 1_000;
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
+        const page = {
+            async goto() {},
+            async evaluate(script) {
+                const text = String(script);
+                if (text.includes('loginLike')) return { ok: true };
+                if (text.includes('draftRestoreGuard')) return { present: false, settled: true };
+                if (text.includes('__ttVidHookInstalled')) return { installed: true };
+                return { ok: true };
+            },
+            async evaluateWithArgs() { return ''; },
+            async setFileInput() {},
+            async wait({ time }) { now += time * 1000; },
+        };
+
+        try {
+            await expect(publishCommand.func(page, {
+                video: tempVideoLocal(),
+                title: 'slow selector',
+                mode: 'auto',
+                timeout: 840,
+            })).rejects.toMatchObject({ code: 'upload_failed' });
+            expect(now).toBeLessThanOrEqual(46_000);
+        } finally {
+            vi.restoreAllMocks();
+        }
     });
 });
 

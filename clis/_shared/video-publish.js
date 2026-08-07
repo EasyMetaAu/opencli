@@ -9,6 +9,7 @@ export const PUBLISH_ERROR_CODES = {
     uploadFailed: 'upload_failed',
     platformError: 'platform_error',
     browserUnsupported: 'browser_unsupported',
+    outcomeUnknown: 'publish_outcome_unknown',
 };
 
 export function publishFailure(code, message, hint) {
@@ -139,6 +140,19 @@ export function successResult(platform, message, extra = {}) {
     }];
 }
 
+export function unknownResult(platform, message) {
+    return [{
+        ok: false,
+        platform,
+        status: 'unknown',
+        code: PUBLISH_ERROR_CODES.outcomeUnknown,
+        capability: '',
+        message,
+        url: '',
+        draft: false,
+    }];
+}
+
 export function classifyPlatformFailure(platform, domain, result, fallbackMessage) {
     if (result?.error === 'auth') {
         throw new AuthRequiredError(domain, result.message || `${platform} publish requires login`);
@@ -183,8 +197,8 @@ export async function waitForAnySelector(page, selectors, timeoutMs = 30_000, in
     return '';
 }
 
-export async function setFileInput(page, files, selectors, platform) {
-    const selector = await waitForAnySelector(page, selectors, 45_000, 750);
+export async function setFileInput(page, files, selectors, platform, timeoutMs = 45_000) {
+    const selector = await waitForAnySelector(page, selectors, timeoutMs, 750);
     if (!selector) {
         throwPublishFailure(PUBLISH_ERROR_CODES.uploadFailed, `${platform} upload failed: file input was not found`);
     }

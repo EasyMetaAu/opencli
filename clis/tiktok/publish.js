@@ -8,15 +8,17 @@ import {
     requireBrowserUploadSupport,
     setFileInput,
     successResult,
+    unknownResult,
     unsupportedResult,
     validateVideoPublishInput,
     visibleElementScript,
 } from '../_shared/video-publish.js';
 import {
     installVidHook,
-    waitForVideoId,
     buildProjectPostBody,
     projectPost,
+    readUploadSnapshot,
+    resetUploadCapture,
     generateCreationId,
 } from './_shared/api-publish.js';
 
@@ -33,6 +35,28 @@ const CAPTION_READY_TIMEOUT_MS = 45_000;
 const CAPTION_READY_POLL_MS = 500;
 const SUBMIT_TIMEOUT_MS = 90_000;
 const SUBMIT_POLL_MS = 1500;
+const UPLOAD_STALL_MS = 90_000;
+
+function remainingMs(deadlineAt) {
+    return Math.max(0, deadlineAt - Date.now());
+}
+
+function phaseDeadline(deadlineAt, maxMs) {
+    return Math.min(deadlineAt, Date.now() + maxMs);
+}
+
+function publishDeadlines(totalBudgetMs, startedAt = Date.now()) {
+    const deadlineAt = startedAt + totalBudgetMs;
+    if (totalBudgetMs <= 180_000) {
+        return { deadlineAt, uploadDeadlineAt: deadlineAt, writeStartBy: deadlineAt };
+    }
+    const receiptReserveMs = Math.min(90_000, Math.max(30_000, Math.floor(totalBudgetMs * 0.2)));
+    return {
+        deadlineAt,
+        uploadDeadlineAt: startedAt + Math.floor(totalBudgetMs * 0.6),
+        writeStartBy: deadlineAt - receiptReserveMs,
+    };
+}
 
 const CAPTION_SELECTORS = [
     '[data-e2e="caption-input"] [contenteditable]:not([contenteditable="false"])',
@@ -114,8 +138,8 @@ async function assertTikTokLoggedIn(page) {
 // is up the file input is not rendered, so a fresh publish dies with "file input was
 // not found". We are about to upload a new file, so discard the stale draft. Poll
 // briefly — the dialog can render a beat after page load.
-async function dismissTikTokDraftRestoreDialog(page) {
-    const deadline = Date.now() + 5_000;
+async function dismissTikTokDraftRestoreDialog(page, deadlineAt = Date.now() + 5_000) {
+    const deadline = phaseDeadline(deadlineAt, 5_000);
     while (Date.now() < deadline) {
         const step = await page.evaluate(`
             (() => {
@@ -141,7 +165,7 @@ async function dismissTikTokDraftRestoreDialog(page) {
             return;
         }
         if (step?.settled && !step?.present) return;
-        await page.wait({ time: 0.5 });
+        await page.wait({ time: Math.min(500, remainingMs(deadline)) / 1000 });
     }
     // Neither the dialog nor the file input showed up within the window — leave slow
     // page loads to setFileInput's own 45s selector wait.
@@ -185,15 +209,74 @@ function buildTikTokUploadReadyProbeScript() {
     `;
 }
 
-async function waitForUploadReady(page) {
-    const deadline = Date.now() + READY_TIMEOUT_MS;
+async function waitForPublishRoute(page, {
+    mode = 'auto',
+    deadlineAt,
+    attemptId = '',
+    pollMs = READY_POLL_MS,
+    stallMs = UPLOAD_STALL_MS,
+} = {}) {
+    let lastLoaded = -1;
+    let lastProgressUpdatedAt = -1;
+    let lastAdvancedAt = Date.now();
+    let hasProgressSignal = false;
+    const legacyDeadline = phaseDeadline(deadlineAt, READY_TIMEOUT_MS);
+
+    while (Date.now() < deadlineAt) {
+        let upload = mode === 'dom'
+            ? { video: null, progress: null }
+            : await readUploadSnapshot(page).catch(() => ({ video: null, progress: null }));
+        // Once this invocation has fenced an upload with an attempt id, a snapshot
+        // without that same identity is unsafe: it may be a stale persistent-tab
+        // video id from an earlier upload. Fail closed instead of writing it.
+        if (attemptId && upload.attemptId !== attemptId) {
+            upload = { video: null, progress: null };
+        }
+        if (upload.video?.video_id) return { kind: 'api', video: upload.video };
+
+        if (mode !== 'api') {
+            const dom = await page.evaluate(buildTikTokUploadReadyProbeScript());
+            if (dom?.ok) return { kind: 'dom' };
+            classifyPlatformFailure(PLATFORM, DOMAIN, dom, 'TikTok upload failed');
+        }
+
+        const loaded = upload.progress?.loaded;
+        const validProgress = Number.isFinite(loaded) && Number.isFinite(upload.progress?.total) && upload.progress.total > 0 && loaded >= 0;
+        if (validProgress) hasProgressSignal = true;
+        if (validProgress) {
+            const updatedAt = Number(upload.progress?.updatedAt);
+            // XHR chunks commonly reset `loaded` to zero for each request. A
+            // newer progress event is still proof that bytes are moving, even
+            // when the numeric counter is lower than the previous chunk.
+            if (Number.isFinite(updatedAt) && updatedAt > lastProgressUpdatedAt) {
+                lastProgressUpdatedAt = updatedAt;
+                lastAdvancedAt = Date.now();
+            } else if (loaded > lastLoaded) {
+                lastAdvancedAt = Date.now();
+            }
+            if (loaded > lastLoaded) lastLoaded = loaded;
+        }
+        if (hasProgressSignal && Date.now() - lastAdvancedAt >= stallMs) {
+            throwPublishFailure(PUBLISH_ERROR_CODES.uploadFailed, `TikTok upload made no progress for ${Math.round(stallMs / 1000)}s`);
+        }
+
+        if (!hasProgressSignal && Date.now() >= legacyDeadline) break;
+
+        const activeDeadline = hasProgressSignal ? deadlineAt : legacyDeadline;
+        await page.wait({ time: Math.min(pollMs, remainingMs(activeDeadline)) / 1000 });
+    }
+    throwPublishFailure(PUBLISH_ERROR_CODES.uploadFailed, 'TikTok upload did not become publishable before the command deadline');
+}
+
+async function waitForUploadReady(page, deadlineAt = Date.now() + READY_TIMEOUT_MS) {
+    const deadline = deadlineAt;
     let lastState = null;
     while (Date.now() < deadline) {
         const result = await page.evaluate(buildTikTokUploadReadyProbeScript());
         lastState = result;
         if (result?.ok) return;
         classifyPlatformFailure(PLATFORM, DOMAIN, result, 'TikTok upload failed');
-        await page.wait({ time: READY_POLL_MS / 1000 });
+        await page.wait({ time: Math.min(READY_POLL_MS, remainingMs(deadline)) / 1000 });
     }
     const screenshotPath = '/tmp/tiktok_upload_ready_debug.png';
     try { await page.screenshot({ path: screenshotPath }); } catch { /* screenshot is best-effort */ }
@@ -215,7 +298,7 @@ async function waitForUploadReady(page) {
 // replace it through DraftJS's beforeinput handler. We verify the new text actually landed
 // and retry, because DraftJS init can lag the upload-ready signal. Newlines are collapsed to
 // spaces (TikTok captions are one free-text block; multi-line programmatic input is mangled).
-async function fillTikTokCaption(page, text) {
+async function fillTikTokCaption(page, text, deadlineAt = Date.now() + CAPTION_READY_TIMEOUT_MS) {
     const caption = String(text).replace(/\s*\n+\s*/g, ' ').trim();
     const probe = caption.replace(/[#@]/g, '').slice(0, 12).trim();
     const findScript = `
@@ -238,11 +321,11 @@ async function fillTikTokCaption(page, text) {
     // The editor can be replaced during TikTok's upload-to-processing transition,
     // especially on a slower CDP/AdsPower browser, so poll instead of probing once.
     let sel = '';
-    const captionDeadline = Date.now() + CAPTION_READY_TIMEOUT_MS;
+    const captionDeadline = phaseDeadline(deadlineAt, CAPTION_READY_TIMEOUT_MS);
     for (;;) {
         sel = await page.evaluate(selectorScript);
         if (sel || Date.now() >= captionDeadline) break;
-        await page.wait({ time: CAPTION_READY_POLL_MS / 1000 });
+        await page.wait({ time: Math.min(CAPTION_READY_POLL_MS, remainingMs(captionDeadline)) / 1000 });
     }
     if (!sel) {
         const screenshotPath = '/tmp/tiktok_caption_debug.png';
@@ -251,7 +334,7 @@ async function fillTikTokCaption(page, text) {
     }
 
     let filled = false;
-    for (let attempt = 0; attempt < 3 && !filled; attempt += 1) {
+    for (let attempt = 0; attempt < 3 && !filled && Date.now() < deadlineAt; attempt += 1) {
         try { await page.click(sel); } catch { /* real click is best-effort */ }
         await page.evaluate(`
             (() => {
@@ -313,7 +396,10 @@ async function fillTikTokCaption(page, text) {
 // snap to the nearest 5-min grid value and out-of-grid days snap to the nearest
 // selectable day; the actually-selected date/time is read back so the caller can
 // report it (no silent adjustment).
-async function setTikTokSchedule(page, raw) {
+async function setTikTokSchedule(page, raw, deadlineAt = Number.POSITIVE_INFINITY) {
+    if (Date.now() >= deadlineAt) {
+        throwPublishFailure(PUBLISH_ERROR_CODES.platformError, 'TikTok schedule setup reached the command deadline before it started');
+    }
     const { epochMs } = parseScheduleInstant(raw);
     const result = await page.evaluateWithArgs(`
         (async () => {
@@ -465,6 +551,10 @@ async function setTikTokSchedule(page, raw) {
         })()
     `, { epochMs });
 
+    if (Date.now() >= deadlineAt) {
+        throwPublishFailure(PUBLISH_ERROR_CODES.platformError, 'TikTok schedule setup crossed the command deadline before publish');
+    }
+
     if (!result?.ok) {
         try { await page.screenshot({ path: '/tmp/tiktok_schedule_debug.png' }); } catch { /* screenshot is best-effort */ }
         throwPublishFailure(
@@ -475,7 +565,12 @@ async function setTikTokSchedule(page, raw) {
     return result;
 }
 
-async function clickTikTokPublish(page, { scheduled = false } = {}) {
+async function clickTikTokPublish(page, {
+    scheduled = false,
+    writeStartBy = Date.now() + SUBMIT_TIMEOUT_MS,
+    deadlineAt = writeStartBy,
+    state = { value: 'preparing' },
+} = {}) {
     // Scheduled primary button is "预约发布" / "Schedule"; immediate is "Post now" / "Post".
     // Scheduled labels deliberately OMIT the bare "Post"/"Publish"/"发布" fallbacks: while
     // TikTok disables the submit button right after setTikTokSchedule, an exact match can't
@@ -533,22 +628,30 @@ async function clickTikTokPublish(page, { scheduled = false } = {}) {
     // the processing budget (floored at 30s so a misconfig can't shrink the wait).
     const submitBudgetMs = Math.max(30_000, Number(process.env.OPENCLI_TIKTOK_SUBMIT_TIMEOUT_MS) || 90_000);
     const startedAt = Date.now();
-    const notFoundDeadline = startedAt + 30_000;
-    const disabledDeadline = startedAt + submitBudgetMs;
+    const notFoundDeadline = Math.min(writeStartBy, startedAt + 30_000);
+    const disabledDeadline = Math.min(writeStartBy, startedAt + submitBudgetMs);
     let sawDisabled = false;
     let result = null;
     while (true) {
         const deadline = sawDisabled ? disabledDeadline : notFoundDeadline;
         if (Date.now() >= deadline) break;
         const exactOnly = Date.now() < deadline - 5_000;
-        result = await page.evaluateWithArgs(`
-            (() => {
-                ${visibleElementScript()}
-                return clickByLabels(labels, { excludeWithin: 'a[href]', excludeLabels, exactOnly, attrSelector });
-            })()
-        `, { labels, excludeLabels, exactOnly, attrSelector });
+        try {
+            result = await page.evaluateWithArgs(`
+                (() => {
+                    ${visibleElementScript()}
+                    return clickByLabels(labels, { excludeWithin: 'a[href]', excludeLabels, exactOnly, attrSelector });
+                })()
+            `, { labels, excludeLabels, exactOnly, attrSelector });
+        } catch (error) {
+            // The click and the CDP response can race. Conservatively cross the write
+            // redline so callers never retry another route after a lost response.
+            state.value = 'dom_write_started';
+            throw error;
+        }
         if (result?.disabled) sawDisabled = true;
         if (result?.ok) {
+            state.value = 'dom_write_started';
             // Self-heal guard: if the click still landed on a nav item, TikTok pops the
             // "Are you sure you want to exit?" modal a beat later — dismiss it via
             // Cancel/取消 and treat the click as failed so polling resumes. Keyed on
@@ -581,6 +684,7 @@ async function clickTikTokPublish(page, { scheduled = false } = {}) {
                 throwPublishFailure(PUBLISH_ERROR_CODES.platformError, `TikTok publish click navigated away from the upload page (${guard.href}); refusing to trust the result`);
             }
             if (guard?.exitDialog) {
+                state.value = 'preparing';
                 if (process.env.OPENCLI_DEBUG_PUBLISH) {
                     process.stderr.write(`[tiktok publish][debug] click ${JSON.stringify(result)} popped the exit dialog (dismissed=${guard.dismissed}); re-polling\n`);
                 }
@@ -590,7 +694,7 @@ async function clickTikTokPublish(page, { scheduled = false } = {}) {
             }
             break;
         }
-        await page.wait({ time: 0.6 });
+        await page.wait({ time: Math.min(600, remainingMs(deadline)) / 1000 });
     }
     if (process.env.OPENCLI_DEBUG_PUBLISH) {
         process.stderr.write(`[tiktok publish][debug] click result: ${JSON.stringify(result)}\n`);
@@ -609,7 +713,7 @@ async function clickTikTokPublish(page, { scheduled = false } = {}) {
     // finished ("版权检查未完成…仍要发布？"). Its confirm button is "立即发布"; clicking it
     // submits with the schedule intact. The dialog appears a beat after the submit click and
     // may not appear at all (check already done → page redirects straight to /content).
-    const confirmDeadline = Date.now() + 12_000;
+    const confirmDeadline = phaseDeadline(deadlineAt, 12_000);
     while (Date.now() < confirmDeadline) {
         const step = await page.evaluate(`
             (() => {
@@ -632,14 +736,14 @@ async function clickTikTokPublish(page, { scheduled = false } = {}) {
             })()
         `);
         if (step?.done || step?.confirmed) return;
-        await page.wait({ time: 0.5 });
+        await page.wait({ time: Math.min(500, remainingMs(confirmDeadline)) / 1000 });
     }
     // No confirm dialog and no redirect within the window — leave result detection to
     // waitForTikTokPublishResult, which polls longer for the success signal.
 }
 
-async function waitForTikTokPublishResult(page, { scheduled = false } = {}) {
-    const deadline = Date.now() + SUBMIT_TIMEOUT_MS;
+async function waitForTikTokPublishResult(page, { scheduled = false, deadlineAt = Date.now() + SUBMIT_TIMEOUT_MS } = {}) {
+    const deadline = deadlineAt;
     while (Date.now() < deadline) {
         const result = await page.evaluateWithArgs(`
             (() => {
@@ -672,7 +776,7 @@ async function waitForTikTokPublishResult(page, { scheduled = false } = {}) {
         `, { scheduled });
         if (result?.ok) return result;
         classifyPlatformFailure(PLATFORM, DOMAIN, result, scheduled ? 'TikTok scheduled publish failed' : 'TikTok publish failed');
-        await page.wait({ time: SUBMIT_POLL_MS / 1000 });
+        await page.wait({ time: Math.min(SUBMIT_POLL_MS, remainingMs(deadline)) / 1000 });
     }
     throwPublishFailure(PUBLISH_ERROR_CODES.platformError, `TikTok ${scheduled ? 'scheduled ' : ''}publish button clicked but result was unclear before timeout; check TikTok Studio manually.`);
 }
@@ -682,38 +786,45 @@ async function waitForTikTokPublishResult(page, { scheduled = false } = {}) {
 // TOS upload response through CDP network capture, then POST the publish/schedule
 // request directly — no calendar, no timepicker, no publish-button DOM. Requires the
 // network capture to be armed BEFORE the upload is triggered.
-async function publishViaApi(page, { caption, scheduleEpochSec, privacy }) {
-    const info = await waitForVideoId(page, { timeoutMs: READY_TIMEOUT_MS, pollMs: READY_POLL_MS });
+async function publishViaApi(page, { caption, scheduleEpochSec, privacy, video, state }) {
     const body = buildProjectPostBody({
         creationId: generateCreationId(),
-        videoId: info.video_id,
+        videoId: video.video_id,
         text: caption,
         scheduleTime: scheduleEpochSec,
         privacy,
     });
-    const { item_id } = await projectPost(page, body);
-    const url = item_id ? `https://www.tiktok.com/@me/video/${item_id}` : '';
-    return { item_id, url };
+    state.value = 'api_write_started';
+    const result = await projectPost(page, body);
+    if (result.outcome !== 'succeeded') return result;
+    return { ...result, url: `https://www.tiktok.com/@me/video/${result.item_id}` };
 }
 
 // ── DOM path (fallback) ────────────────────────────────────────────────────────
 // The original browser-automation flow, unchanged: wait for the editor, type the
 // caption into DraftJS, drive the schedule pickers, click publish, read the result.
-async function publishViaDom(page, { caption, schedule }) {
-    await waitForUploadReady(page);
-    await fillTikTokCaption(page, caption);
+async function publishViaDom(page, { caption, schedule, writeStartBy, deadlineAt, state }) {
+    await fillTikTokCaption(page, caption, writeStartBy);
     const scheduled = Boolean(schedule);
     let scheduledInfo = null;
     if (scheduled) {
-        scheduledInfo = await setTikTokSchedule(page, schedule);
+        scheduledInfo = await setTikTokSchedule(page, schedule, writeStartBy);
     }
-    await clickTikTokPublish(page, { scheduled });
-    const publishResult = await waitForTikTokPublishResult(page, { scheduled });
-    const message = scheduledInfo
-        ? `TikTok scheduled for ${scheduledInfo.selectedDate} ${scheduledInfo.selectedTime} (${scheduledInfo.tz})`
-            + (scheduledInfo.rounded ? `; requested ${scheduledInfo.requested}, snapped to nearest available slot` : '')
-        : (publishResult.message || 'TikTok publish completed');
-    return { url: publishResult.url || '', message };
+    if (Date.now() >= writeStartBy) {
+        throwPublishFailure(PUBLISH_ERROR_CODES.platformError, 'TikTok publish preparation exhausted the command deadline before clicking publish');
+    }
+    try {
+        await clickTikTokPublish(page, { scheduled, writeStartBy, deadlineAt, state });
+        const publishResult = await waitForTikTokPublishResult(page, { scheduled, deadlineAt });
+        const message = scheduledInfo
+            ? `TikTok scheduled for ${scheduledInfo.selectedDate} ${scheduledInfo.selectedTime} (${scheduledInfo.tz})`
+                + (scheduledInfo.rounded ? `; requested ${scheduledInfo.requested}, snapped to nearest available slot` : '')
+            : (publishResult.message || 'TikTok publish completed');
+        return { outcome: 'succeeded', url: publishResult.url || '', message };
+    } catch (error) {
+        if (state.value !== 'dom_write_started') throw error;
+        return { outcome: 'unknown', message: error instanceof Error ? error.message : String(error) };
+    }
 }
 
 export const publishCommand = cli({
@@ -749,6 +860,9 @@ export const publishCommand = cli({
         if (unsupported) return unsupported;
 
         const mode = kwargs.mode || 'auto';
+        const totalBudgetMs = (Number(kwargs.timeout) || 180) * 1000;
+        const { deadlineAt, uploadDeadlineAt, writeStartBy } = publishDeadlines(totalBudgetMs);
+        const state = { value: 'preparing' };
         const caption = [input.title, buildDescriptionWithTags(input.description, input.tags)].filter(Boolean).join('\n\n');
         // schedule → epoch seconds for the API path (0 = publish now).
         const scheduleEpochSec = input.schedule ? Math.floor(parseScheduleInstant(input.schedule).epochMs / 1000) : 0;
@@ -757,35 +871,41 @@ export const publishCommand = cli({
         await requireBrowserUploadSupport(page, PLATFORM);
         await page.goto(UPLOAD_URL, { waitUntil: 'load', settleMs: 3000 });
         await assertTikTokLoggedIn(page);
-        await dismissTikTokDraftRestoreDialog(page);
+        await dismissTikTokDraftRestoreDialog(page, writeStartBy);
         // Install the page-side vid hook AFTER navigation (fresh context) but BEFORE the
         // upload, so the API path can read the vid from the TOS finish response.
         if (canApi) {
             await installVidHook(page).catch(() => {});
         }
-        await setFileInput(page, [input.videoPath], FILE_SELECTORS, PLATFORM);
+        const attemptId = generateCreationId();
+        await resetUploadCapture(page, attemptId);
+        await setFileInput(page, [input.videoPath], FILE_SELECTORS, PLATFORM, Math.min(45_000, remainingMs(writeStartBy)));
+        const route = await waitForPublishRoute(page, { mode, deadlineAt: uploadDeadlineAt, attemptId });
 
-        // API path first (fast, no DOM). Fall back to DOM unless the user forced a mode.
-        if (canApi) {
-            try {
-                const apiResult = await publishViaApi(page, { caption, scheduleEpochSec, privacy: input.privacy });
-                const message = scheduleEpochSec
-                    ? `TikTok scheduled via API for ${new Date(scheduleEpochSec * 1000).toISOString()} (item ${apiResult.item_id})`
-                    : `TikTok published via API (item ${apiResult.item_id})`;
-                return successResult(PLATFORM, message, { url: apiResult.url, draft: false });
-            } catch (apiError) {
-                if (mode === 'api') {
-                    throwPublishFailure(PUBLISH_ERROR_CODES.platformError, `TikTok API publish failed: ${apiError instanceof Error ? apiError.message : String(apiError)}`);
-                }
-                // fall through to DOM path
-                if (process.env.OPENCLI_DEBUG_PUBLISH) {
-                    process.stderr.write(`[tiktok publish][debug] API path failed, falling back to DOM: ${apiError instanceof Error ? apiError.message : String(apiError)}\n`);
-                }
+        if (route.kind === 'api') {
+            const apiResult = await publishViaApi(page, {
+                caption,
+                scheduleEpochSec,
+                privacy: input.privacy,
+                video: route.video,
+                state,
+            });
+            if (apiResult.outcome === 'unknown') {
+                return unknownResult(PLATFORM, `TikTok API publish outcome is unknown: ${apiResult.message}`);
             }
+            if (apiResult.outcome === 'rejected') {
+                throwPublishFailure(PUBLISH_ERROR_CODES.platformError, apiResult.message);
+            }
+            const message = scheduleEpochSec
+                ? `TikTok scheduled via API for ${new Date(scheduleEpochSec * 1000).toISOString()} (item ${apiResult.item_id})`
+                : `TikTok published via API (item ${apiResult.item_id})`;
+            return successResult(PLATFORM, message, { url: apiResult.url, draft: false });
         }
 
-        // DOM path (fallback, or mode=dom).
-        const domResult = await publishViaDom(page, { caption, schedule: input.schedule });
+        const domResult = await publishViaDom(page, { caption, schedule: input.schedule, writeStartBy, deadlineAt, state });
+        if (domResult.outcome === 'unknown') {
+            return unknownResult(PLATFORM, `TikTok DOM publish outcome is unknown: ${domResult.message}`);
+        }
         return successResult(PLATFORM, domResult.message, { url: domResult.url, draft: false });
     },
 });
@@ -800,4 +920,6 @@ export const __test__ = {
     setTikTokSchedule,
     clickTikTokPublish,
     dismissTikTokDraftRestoreDialog,
+    waitForPublishRoute,
+    publishDeadlines,
 };

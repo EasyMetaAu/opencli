@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { JSDOM } from 'jsdom';
 import { buildProjectPostBody, waitForVideoId, __test__ } from './api-publish.js';
 
 const { buildTextExtra, VISIBILITY_TYPE } = __test__;
@@ -30,6 +31,75 @@ describe('tiktok api-publish: waitForVideoId (page-hook poll)', () => {
     it('throws if no vid appears before the timeout', async () => {
         const page = hookPage([null]);
         await expect(waitForVideoId(page, { timeoutMs: 30, pollMs: 5 })).rejects.toThrow(/did not yield a video_id/);
+    });
+});
+
+describe('tiktok api-publish: XHR upload progress hook', () => {
+    it('records advancing upload bytes for the shared stall deadline', () => {
+        const dom = new JSDOM('<!doctype html>', { url: 'https://www.tiktok.com/tiktokstudio/upload', runScripts: 'outside-only' });
+        class FakeXhr {
+            static last;
+            upload = { addEventListener: (name, fn) => { this.uploadListener = name === 'progress' ? fn : this.uploadListener; } };
+            addEventListener() {}
+            open(_method, url) { this.url = url; }
+            send() { FakeXhr.last = this; }
+        }
+        dom.window.XMLHttpRequest = FakeXhr;
+        dom.window.eval(__test__.installVidHookScript());
+
+        const xhr = new dom.window.XMLHttpRequest();
+        xhr.open('POST', 'https://tos19-up-useast1a.tiktokcdn-us.com/upload/v1/tos-test');
+        xhr.send();
+        xhr.uploadListener({ loaded: 42, total: 100, lengthComputable: true });
+
+        expect(dom.window.__ttUploadProgress).toMatchObject({ loaded: 42, total: 100 });
+    });
+
+    it('ignores progress from an XHR that belongs to an older upload attempt', () => {
+        const dom = new JSDOM('<!doctype html>', { url: 'https://www.tiktok.com/tiktokstudio/upload', runScripts: 'outside-only' });
+        class FakeXhr {
+            upload = { addEventListener: (name, fn) => { this.uploadListener = name === 'progress' ? fn : this.uploadListener; } };
+            addEventListener() {}
+            open(_method, url) { this.url = url; }
+            send() {}
+        }
+        dom.window.XMLHttpRequest = FakeXhr;
+        dom.window.eval(__test__.installVidHookScript());
+        dom.window.eval(__test__.resetUploadCaptureScript('old-attempt'));
+        const oldXhr = new dom.window.XMLHttpRequest();
+        oldXhr.open('POST', 'https://tos19-up-useast1a.tiktokcdn-us.com/upload/v1/tos-old');
+        oldXhr.send();
+
+        dom.window.eval(__test__.resetUploadCaptureScript('new-attempt'));
+        oldXhr.uploadListener({ loaded: 99, total: 100, lengthComputable: true });
+
+        expect(dom.window.__ttUploadProgress).toBeNull();
+        expect(dom.window.__ttUploadAttempt).toBe('new-attempt');
+    });
+
+    it('aggregates progress across chunk XHRs whose loaded counters restart at zero', () => {
+        const dom = new JSDOM('<!doctype html>', { url: 'https://www.tiktok.com/tiktokstudio/upload', runScripts: 'outside-only' });
+        class FakeXhr {
+            upload = { addEventListener: (name, fn) => { this.uploadListener = name === 'progress' ? fn : this.uploadListener; } };
+            addEventListener() {}
+            open(_method, url) { this.url = url; }
+            send() {}
+        }
+        dom.window.XMLHttpRequest = FakeXhr;
+        dom.window.eval(__test__.installVidHookScript());
+        dom.window.eval(__test__.resetUploadCaptureScript('chunked-attempt'));
+
+        const first = new dom.window.XMLHttpRequest();
+        first.open('POST', 'https://tos19-up-useast1a.tiktokcdn-us.com/upload/v1/tos-chunk-1');
+        first.send();
+        first.uploadListener({ loaded: 100, total: 100, lengthComputable: true });
+
+        const second = new dom.window.XMLHttpRequest();
+        second.open('POST', 'https://tos19-up-useast1a.tiktokcdn-us.com/upload/v1/tos-chunk-2');
+        second.send();
+        second.uploadListener({ loaded: 10, total: 100, lengthComputable: true });
+
+        expect(dom.window.__ttUploadProgress).toMatchObject({ loaded: 110 });
     });
 });
 
